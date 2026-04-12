@@ -86,8 +86,23 @@ final class NimbleEngine: ObservableObject {
 
     /// Load the bundled .osim model.
     func loadBundledModel() {
-        guard let path = Bundle.main.path(forResource: "Rajagopal2016", ofType: "osim") else {
-            print("NimbleEngine: Rajagopal2016.osim not found in bundle")
+        // Production full-body model: cyclistFullBodyMuscle.osim, shipped
+        // as FullBody.osim in the app bundle. 80 bodies, 520 muscles
+        // (Millard2012 lower + Thelen2003 upper/trunk/spine), covers arm
+        // + detailed spine + ribcage + pelvis + full lower extremity.
+        //
+        // Fallback to the old Rajagopal2016 model if FullBody.osim is
+        // missing from the bundle — lets developers hand-drop the old
+        // model back into Resources/ without code changes.
+        let path: String
+        if let fb = Bundle.main.path(forResource: "FullBody", ofType: "osim") {
+            path = fb
+            print("NimbleEngine: loading FullBody.osim (cyclistFullBodyMuscle — 520 muscles)")
+        } else if let raj = Bundle.main.path(forResource: "Rajagopal2016", ofType: "osim") {
+            path = raj
+            print("NimbleEngine: ⚠ FullBody.osim not found — falling back to Rajagopal2016 (81 lower-extremity muscles only)")
+        } else {
+            print("NimbleEngine: no .osim model found in bundle")
             return
         }
         solverQueue.async { [weak self] in

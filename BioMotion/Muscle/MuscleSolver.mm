@@ -121,37 +121,47 @@ static std::vector<muscle::MuscleParams> parseMusclesFromOsim(const std::string&
     auto* objects = forceSet->FirstChildElement("objects");
     if (!objects) return muscles;
 
-    // Parse each Millard2012EquilibriumMuscle
-    for (auto* muscleEl = objects->FirstChildElement("Millard2012EquilibriumMuscle");
-         muscleEl;
-         muscleEl = muscleEl->NextSiblingElement("Millard2012EquilibriumMuscle")) {
+    // Iterate both Millard2012 and Thelen2003 muscle classes — full-body
+    // models routinely mix the two.
+    static const char* const muscleClasses[] = {
+        "Millard2012EquilibriumMuscle",
+        "Thelen2003Muscle",
+        nullptr,
+    };
+    for (int ci = 0; muscleClasses[ci]; ci++) {
+        for (auto* muscleEl = objects->FirstChildElement(muscleClasses[ci]);
+             muscleEl;
+             muscleEl = muscleEl->NextSiblingElement(muscleClasses[ci])) {
 
-        muscle::MuscleParams params;
-        params.maxContractionVelocity = 10.0; // default
+            muscle::MuscleParams params;
+            params.maxContractionVelocity = 10.0; // default
 
-        const char* name = muscleEl->Attribute("name");
-        if (name) params.name = name;
+            const char* name = muscleEl->Attribute("name");
+            if (name) params.name = name;
 
-        auto readDouble = [&](const char* tag) -> double {
-            auto* el = muscleEl->FirstChildElement(tag);
-            if (el && el->GetText()) return std::stod(el->GetText());
-            return 0.0;
-        };
+            auto readDouble = [&](const char* tag) -> double {
+                auto* el = muscleEl->FirstChildElement(tag);
+                if (el && el->GetText()) return std::stod(el->GetText());
+                return 0.0;
+            };
 
-        params.maxIsometricForce = readDouble("max_isometric_force");
-        params.optimalFiberLength = readDouble("optimal_fiber_length");
-        params.tendonSlackLength = readDouble("tendon_slack_length");
-        params.pennationAngleAtOptimal = readDouble("pennation_angle_at_optimal");
+            params.maxIsometricForce = readDouble("max_isometric_force");
+            params.optimalFiberLength = readDouble("optimal_fiber_length");
+            params.tendonSlackLength = readDouble("tendon_slack_length");
+            params.pennationAngleAtOptimal = readDouble("pennation_angle_at_optimal");
 
-        auto* vel = muscleEl->FirstChildElement("max_contraction_velocity");
-        if (vel && vel->GetText()) params.maxContractionVelocity = std::stod(vel->GetText());
+            auto* vel = muscleEl->FirstChildElement("max_contraction_velocity");
+            if (vel && vel->GetText()) params.maxContractionVelocity = std::stod(vel->GetText());
 
-        // Parse GeometryPath to determine which joints the muscle crosses
-        // For now, we use a simplified heuristic based on muscle name + attachment bodies
-        assignMomentArmsFromName(params);
+            // Legacy path uses a hardcoded name-based moment arm table.
+            // Production solver replaces this with real FK moment arms via
+            // MomentArmComputer, so this only affects the legacy path that's
+            // no longer called from NimbleEngine.
+            assignMomentArmsFromName(params);
 
-        if (params.maxIsometricForce > 0 && params.optimalFiberLength > 0) {
-            muscles.push_back(params);
+            if (params.maxIsometricForce > 0 && params.optimalFiberLength > 0) {
+                muscles.push_back(params);
+            }
         }
     }
 

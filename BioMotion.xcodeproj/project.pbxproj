@@ -22,6 +22,7 @@
 		98613DC9BB618D40355A1196 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = DD8D8EE2FB43D7D0467DA761 /* Resources */; };
 		ABE29919DAB357CEDBF7D9E5 /* MuscleOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCE04065D9DEF183FAB2526A /* MuscleOverlay.swift */; };
 		AEBD0D6F6A05031B4795C512 /* BodyTrackingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 675A6A481192DE8527711A02 /* BodyTrackingSession.swift */; };
+		B1670D1FDAE907294D961E3F /* FullBody.osim in Resources */ = {isa = PBXBuildFile; fileRef = 4B9713307F6A75E4289F37D8 /* FullBody.osim */; };
 		BFE358FA68B0E8249A400DBF /* MotionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85CB2DC650F7D9EA6AA72EF6 /* MotionRecorderTests.swift */; };
 		CC6C983411E3BECBF5DD0CF8 /* BodyJoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2FCB0E08D59A9A2F873C83 /* BodyJoint.swift */; };
 		D093D465CAC7E39DD39FDCE5 /* TRCExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D7EE8254FA65A2ED3CA941A /* TRCExporter.swift */; };
@@ -53,6 +54,7 @@
 		44D59B2D4FBCD3D020D9136A /* Rajagopal2016.osim */ = {isa = PBXFileReference; path = Rajagopal2016.osim; sourceTree = "<group>"; };
 		4A5E8807D42FF44784FCF22F /* OneEuroFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OneEuroFilter.swift; sourceTree = "<group>"; };
 		4AEC9BFD12C6D6FC08E98C76 /* TRCExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRCExporterTests.swift; sourceTree = "<group>"; };
+		4B9713307F6A75E4289F37D8 /* FullBody.osim */ = {isa = PBXFileReference; path = FullBody.osim; sourceTree = "<group>"; };
 		5D7EE8254FA65A2ED3CA941A /* TRCExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRCExporter.swift; sourceTree = "<group>"; };
 		607642EB6C7BD1743AB7D031 /* BioMotion-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "BioMotion-Bridging-Header.h"; sourceTree = "<group>"; };
 		61281090913631B0CE9A7C73 /* BioMotionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BioMotionApp.swift; sourceTree = "<group>"; };
@@ -78,6 +80,7 @@
 		D8B9BD44107DF71632646C0E /* MuscleSolver.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MuscleSolver.mm; sourceTree = "<group>"; };
 		DB99C395726EDA0E87378FE8 /* NimbleBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NimbleBridge.h; sourceTree = "<group>"; };
 		DD8D8EE2FB43D7D0467DA761 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Resources; path = BioMotion/Resources; sourceTree = SOURCE_ROOT; };
+		DE061204EBCA562182A0C976 /* NimbleBridge+Internal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NimbleBridge+Internal.h"; sourceTree = "<group>"; };
 		EB4E89539823D96EB49C208D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -88,6 +91,7 @@
 				607642EB6C7BD1743AB7D031 /* BioMotion-Bridging-Header.h */,
 				DB99C395726EDA0E87378FE8 /* NimbleBridge.h */,
 				CF5D35BA98B286FEF7D0F3A2 /* NimbleBridge.mm */,
+				DE061204EBCA562182A0C976 /* NimbleBridge+Internal.h */,
 				6BCF8A0B85EADE0EACE2E91D /* NimbleEngine.swift */,
 				069BD05C894EA1A3D4B71811 /* SavitzkyGolayFilter.swift */,
 			);
@@ -138,6 +142,7 @@
 		855C11D1FAD67039BFAEBF2B /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				4B9713307F6A75E4289F37D8 /* FullBody.osim */,
 				44D59B2D4FBCD3D020D9136A /* Rajagopal2016.osim */,
 			);
 			path = Resources;
@@ -282,6 +287,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8804D81FA38EF570856C727E /* Assets.xcassets in Resources */,
+				B1670D1FDAE907294D961E3F /* FullBody.osim in Resources */,
 				FD38E7F1B9C09FAC1FE3C10A /* Rajagopal2016.osim in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -370,7 +376,7 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = N7VVB6PWZS;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"DART_IOS_BUILD=1",
@@ -557,7 +563,7 @@
 				CLANG_CXX_LANGUAGE_STANDARD = "c++17";
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 8;
+				CURRENT_PROJECT_VERSION = 11;
 				DEVELOPMENT_TEAM = N7VVB6PWZS;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"DART_IOS_BUILD=1",

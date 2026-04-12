@@ -123,9 +123,23 @@ struct InternalMusclePath {
 
     _musclePaths.clear();
 
-    for (auto* muscleEl = objects->FirstChildElement("Millard2012EquilibriumMuscle");
+    // Muscle parser that handles both Millard2012EquilibriumMuscle and
+    // Thelen2003Muscle — they share the same XML fields (max_isometric_force,
+    // optimal_fiber_length, tendon_slack_length, pennation_angle_at_optimal,
+    // max_contraction_velocity, GeometryPath). Full-body models like
+    // cyclistFullBodyMuscle mix the two classes (Millard for lower body,
+    // Thelen for upper body + spine), so we iterate both XML tags under
+    // <ForceSet>/<objects>.
+    static const char* const muscleClasses[] = {
+        "Millard2012EquilibriumMuscle",
+        "Thelen2003Muscle",
+        nullptr,
+    };
+
+    for (int ci = 0; muscleClasses[ci]; ci++) {
+    for (auto* muscleEl = objects->FirstChildElement(muscleClasses[ci]);
          muscleEl;
-         muscleEl = muscleEl->NextSiblingElement("Millard2012EquilibriumMuscle")) {
+         muscleEl = muscleEl->NextSiblingElement(muscleClasses[ci])) {
 
         InternalMusclePath mp;
         const char* name = muscleEl->Attribute("name");
@@ -191,6 +205,7 @@ struct InternalMusclePath {
             _musclePaths.push_back(mp);
         }
     }
+    }  // end muscle-class loop
 
     // Validate that every PathPoint resolves to a real body in the
     // shared skeleton. If not, the muscle-length FK will silently

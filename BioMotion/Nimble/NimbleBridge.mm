@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <memory>
+#include <set>
 
 #include "dart/biomechanics/OpenSimParser.hpp"
 #include "dart/dynamics/Skeleton.hpp"
@@ -160,13 +161,21 @@ using namespace dart;
         // ARKit gives us joint-center positions, not surface-marker positions,
         // so we attach one marker per body at a well-defined local point.
         //
-        // For Rajagopal2016 the spine is a single rigid `torso` body from pelvis
-        // top to shoulders; there are no separate lumbar/thoracic/cervical/head
-        // segments. We still want ARKit's spine/C7/neck/head markers to feed IK
-        // (they help constrain torso orientation), so we attach them to the
-        // torso body at heuristic vertical offsets that approximate where the
-        // real landmarks sit along an average torso. MarkerFitter in M6 will
-        // refine these offsets per subject.
+        // Strategy is adaptive across the two supported models:
+        //
+        // - Rajagopal2016 (old default): single `torso` body from pelvis to
+        //   shoulders, no separate spine/head/clavicle/scapula. ARKit spine
+        //   / C7 / neck / head markers attach to the torso body with
+        //   heuristic +Y offsets.
+        //
+        // - cyclistFullBodyMuscle.osim (new full-body): detailed spine with
+        //   lumbar1-5, thoracic1-12, sacrum, head_neck, plus clavicle and
+        //   scapula segments. We map ARKit markers to the closest real
+        //   segment and let IK fit the multi-segment spine properly.
+        //
+        // A marker whose target body doesn't exist in the loaded skeleton is
+        // silently skipped (and reported in the "missing bodies" log below),
+        // so the same table works for both models.
         //
         // Each entry: ARKit marker name -> (body name, local offset in meters).
         struct VirtualMarker {
@@ -176,23 +185,41 @@ using namespace dart;
         };
         VirtualMarker virtualMarkers[] = {
             // Pelvis / lower extremities — all at body origin (= joint center)
-            {"PELVIS",  "pelvis",   0.0,  0.0,  0.0},
-            {"LHJC",    "femur_l",  0.0,  0.0,  0.0},
-            {"RHJC",    "femur_r",  0.0,  0.0,  0.0},
-            {"LKJC",    "tibia_l",  0.0,  0.0,  0.0},
-            {"RKJC",    "tibia_r",  0.0,  0.0,  0.0},
-            {"LAJC",    "talus_l",  0.0,  0.0,  0.0},
-            {"RAJC",    "talus_r",  0.0,  0.0,  0.0},
-            {"LTOE",    "toes_l",   0.0,  0.0,  0.0},
-            {"RTOE",    "toes_r",   0.0,  0.0,  0.0},
-            // Torso (single rigid segment in Rajagopal2016) — distribute markers
-            // up the body's +Y axis (torso body Y points from base to top).
-            {"SPINE_L", "torso",    0.0,  0.10, 0.0},
-            {"SPINE_M", "torso",    0.0,  0.22, 0.0},
-            {"C7",      "torso",    0.0,  0.38, 0.0},
-            {"NECK",    "torso",    0.0,  0.44, 0.0},
-            {"HEAD",    "torso",    0.0,  0.58, 0.0},
-            // Upper extremities — joint centers at each body's origin.
+            {"PELVIS",  "pelvis",    0.0,  0.0,  0.0},
+            {"LHJC",    "femur_l",   0.0,  0.0,  0.0},
+            {"RHJC",    "femur_r",   0.0,  0.0,  0.0},
+            {"LKJC",    "tibia_l",   0.0,  0.0,  0.0},
+            {"RKJC",    "tibia_r",   0.0,  0.0,  0.0},
+            {"LAJC",    "talus_l",   0.0,  0.0,  0.0},
+            {"RAJC",    "talus_r",   0.0,  0.0,  0.0},
+            {"LTOE",    "toes_l",    0.0,  0.0,  0.0},
+            {"RTOE",    "toes_r",    0.0,  0.0,  0.0},
+
+            // --- Spine markers, new-model mapping (cyclist full body) ---
+            // lumbar3 ≈ mid-lumbar, thoracic7 ≈ mid-thoracic, thoracic1 ≈ C7,
+            // head_neck is a single body that spans neck + skull.
+            {"SPINE_L", "lumbar3",   0.0,  0.0,  0.0},
+            {"SPINE_M", "thoracic7", 0.0,  0.0,  0.0},
+            {"C7",      "thoracic1", 0.0,  0.0,  0.0},
+            {"NECK",    "head_neck", 0.0,  0.0,  0.0},
+            {"HEAD",    "head_neck", 0.0,  0.15, 0.0},
+            // --- Spine markers, old-model fallback (Rajagopal2016 torso) ---
+            // Name-collision: for entries with the same marker name, only the
+            // first-resolved body wins because `_markers[name] = ...` is a map
+            // assignment. Since Rajagopal2016 doesn't have lumbar3 / thoracic*,
+            // the cyclist-model rows above are silently skipped and these
+            // torso-based fallbacks are used instead.
+            {"SPINE_L", "torso",     0.0,  0.10, 0.0},
+            {"SPINE_M", "torso",     0.0,  0.22, 0.0},
+            {"C7",      "torso",     0.0,  0.38, 0.0},
+            {"NECK",    "torso",     0.0,  0.44, 0.0},
+            {"HEAD",    "torso",     0.0,  0.58, 0.0},
+
+            // --- Upper extremities ---
+            // New full-body model has clavicle + scapula bodies ahead of
+            // humerus. ARKit's shoulder marker is the gleno-humeral joint
+            // center, which corresponds to the humerus body origin on both
+            // models, so the mapping is the same.
             {"LSJC",    "humerus_l", 0.0, 0.0,  0.0},
             {"RSJC",    "humerus_r", 0.0, 0.0,  0.0},
             {"LEJC",    "ulna_l",    0.0, 0.0,  0.0},
@@ -201,26 +228,41 @@ using namespace dart;
             {"RWJC",    "hand_r",    0.0, 0.0,  0.0},
         };
 
-        int addedVirtual = 0;
-        NSMutableArray<NSString *> *missingBodies = [NSMutableArray array];
+        // First-write-wins: cyclist-model rows come before Rajagopal2016
+        // fallbacks in `virtualMarkers`, so on cyclist the detailed spine
+        // mapping is installed first and any later fallback row for the
+        // same marker is ignored. On Rajagopal2016 the cyclist rows don't
+        // resolve (no lumbar3 / thoracic7 / head_neck bodies), so the
+        // torso-based fallbacks fill in.
+        std::set<std::string> attemptedMarkers;
         for (const auto& vm : virtualMarkers) {
+            std::string markerName(vm.name);
+            attemptedMarkers.insert(markerName);
+            if (_markers.find(markerName) != _markers.end()) {
+                continue;  // Already placed — earlier row won.
+            }
             dynamics::BodyNode* body = _skeleton->getBodyNode(std::string(vm.bodyName));
             if (body) {
-                _markers[std::string(vm.name)] = {
+                _markers[markerName] = {
                     body,
                     Eigen::Vector3s(vm.offsetX, vm.offsetY, vm.offsetZ)
                 };
-                addedVirtual++;
-            } else {
-                [missingBodies addObject:
-                    [NSString stringWithFormat:@"%s(→%s)", vm.name, vm.bodyName]];
             }
         }
-        NSLog(@"NimbleBridge: Added %d/%lu virtual markers at joint centers",
-              addedVirtual, sizeof(virtualMarkers)/sizeof(virtualMarkers[0]));
-        if (missingBodies.count > 0) {
-            NSLog(@"NimbleBridge: Skipped markers with missing bodies: %@",
-                  [missingBodies componentsJoinedByString:@", "]);
+
+        // Report: how many unique ARKit markers got placed vs. attempted.
+        NSMutableArray<NSString *> *unplacedNames = [NSMutableArray array];
+        for (const auto& name : attemptedMarkers) {
+            if (_markers.find(name) == _markers.end()) {
+                [unplacedNames addObject:[NSString stringWithUTF8String:name.c_str()]];
+            }
+        }
+        NSLog(@"NimbleBridge: Placed %lu/%lu unique virtual markers",
+              (unsigned long)(attemptedMarkers.size() - unplacedNames.count),
+              (unsigned long)attemptedMarkers.size());
+        if (unplacedNames.count > 0) {
+            NSLog(@"NimbleBridge: ⚠ Unresolvable markers (no fallback body worked): %@",
+                  [unplacedNames componentsJoinedByString:@", "]);
         }
 
         _modelLoaded = YES;
@@ -386,11 +428,15 @@ using namespace dart;
     Eigen::VectorXs bodyScales(numBodies * 3);
 
     auto groupScale = [&](const std::string& bodyName) -> double {
-        // Upper extremity bodies
+        // Upper extremity bodies (incl. clavicle + scapula on the new
+        // full-body model, which exist in the kinematic chain between
+        // torso/thoracic and humerus).
         if (bodyName.find("humerus") != std::string::npos ||
             bodyName.find("radius") != std::string::npos ||
             bodyName.find("ulna") != std::string::npos ||
-            bodyName.find("hand") != std::string::npos) {
+            bodyName.find("hand") != std::string::npos ||
+            bodyName.find("clavicle") != std::string::npos ||
+            bodyName.find("scapula") != std::string::npos) {
             return upperScale;
         }
         // Lower extremity bodies
@@ -402,7 +448,9 @@ using namespace dart;
             bodyName.find("toes") != std::string::npos) {
             return lowerScale;
         }
-        // Torso, pelvis, head, neck → trunk
+        // Trunk: pelvis, torso, plus the detailed spine/ribcage on the new
+        // full-body model — lumbar*, thoracic*, sacrum, rib*, sternum,
+        // head_neck, Abdomen, Abd_*. All get the trunk scale.
         return trunkScale;
     };
 
