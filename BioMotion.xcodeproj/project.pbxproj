@@ -29,6 +29,7 @@
 		E1C04472A89C653399F92677 /* BioMotionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61281090913631B0CE9A7C73 /* BioMotionApp.swift */; };
 		EA0D96BEE590A8EC44964245 /* SessionChartsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB61194FADC588D790C9D483 /* SessionChartsView.swift */; };
 		EDA3373BCD3746A22F7CD272 /* NimbleEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BCF8A0B85EADE0EACE2E91D /* NimbleEngine.swift */; };
+		EFDB7E94C87B175ECC83B78E /* SavitzkyGolayFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 069BD05C894EA1A3D4B71811 /* SavitzkyGolayFilter.swift */; };
 		F5D3FF290D1F2FC2D53CD448 /* osqp_interrupt_stub.c in Sources */ = {isa = PBXBuildFile; fileRef = 61F7A23E87AFC3190713C1D6 /* osqp_interrupt_stub.c */; };
 		F879356CA878DC33DEF470D4 /* TRCExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AEC9BFD12C6D6FC08E98C76 /* TRCExporterTests.swift */; };
 		FD38E7F1B9C09FAC1FE3C10A /* Rajagopal2016.osim in Resources */ = {isa = PBXBuildFile; fileRef = 44D59B2D4FBCD3D020D9136A /* Rajagopal2016.osim */; };
@@ -45,6 +46,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		069BD05C894EA1A3D4B71811 /* SavitzkyGolayFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavitzkyGolayFilter.swift; sourceTree = "<group>"; };
 		137569E8BB6168170913C1FE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		39C64A42A229077EC3CF47FD /* BodyJointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyJointTests.swift; sourceTree = "<group>"; };
 		3F2FCB0E08D59A9A2F873C83 /* BodyJoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyJoint.swift; sourceTree = "<group>"; };
@@ -87,6 +89,7 @@
 				DB99C395726EDA0E87378FE8 /* NimbleBridge.h */,
 				CF5D35BA98B286FEF7D0F3A2 /* NimbleBridge.mm */,
 				6BCF8A0B85EADE0EACE2E91D /* NimbleEngine.swift */,
+				069BD05C894EA1A3D4B71811 /* SavitzkyGolayFilter.swift */,
 			);
 			path = Nimble;
 			sourceTree = "<group>";
@@ -310,6 +313,7 @@
 				2054C2A9E28C0BC0833FCFC9 /* NimbleBridge.mm in Sources */,
 				EDA3373BCD3746A22F7CD272 /* NimbleEngine.swift in Sources */,
 				39A5BD9ECC7553A6C9F6E556 /* OneEuroFilter.swift in Sources */,
+				EFDB7E94C87B175ECC83B78E /* SavitzkyGolayFilter.swift in Sources */,
 				EA0D96BEE590A8EC44964245 /* SessionChartsView.swift in Sources */,
 				7ED1CE05D8C199C942D22051 /* SkeletonOverlayView.swift in Sources */,
 				D093D465CAC7E39DD39FDCE5 /* TRCExporter.swift in Sources */,

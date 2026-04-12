@@ -76,6 +76,36 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 4)
 
+                // Accuracy diagnostics: IK residual (m) and max joint torque per kg.
+                // Goal ranges after full accuracy overhaul:
+                //   residual ≈ 0.01–0.03 m (ARKit-limited floor)
+                //   |τ|/m    ≈ 1–3 Nm/kg for walking/squat (physiological).
+                // Values >> 10 Nm/kg usually mean missing GRF or bad ddq.
+                if nimble.isModelLoaded && bodyTracking.isTracking {
+                    HStack(spacing: 6) {
+                        AccuracyBadge(
+                            label: "residual",
+                            value: String(format: "%.3f m", nimble.ikMarkerResidualMeters),
+                            good: nimble.ikMarkerResidualMeters < 0.05
+                        )
+                        AccuracyBadge(
+                            label: "max |τ|/m",
+                            value: String(format: "%.1f Nm/kg", nimble.maxTorquePerKg),
+                            good: nimble.maxTorquePerKg < 5.0
+                        )
+                        if nimble.totalMassKg > 0 {
+                            AccuracyBadge(
+                                label: "mass",
+                                value: String(format: "%.0f kg", nimble.totalMassKg),
+                                good: true
+                            )
+                        }
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 2)
+                }
+
                 // === PUSH EVERYTHING ELSE DOWN ===
                 Spacer()
 
@@ -250,6 +280,25 @@ struct StatusBadge: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 5)
         .background(.black.opacity(0.6), in: Capsule())
+    }
+}
+
+/// Compact label+value pill used for precision diagnostics in the HUD.
+struct AccuracyBadge: View {
+    let label: String
+    let value: String
+    let good: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(label).font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+            Text(value).font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(good ? Color.green : Color.orange)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(.black.opacity(0.55), in: Capsule())
     }
 }
 

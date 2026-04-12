@@ -142,6 +142,11 @@ using namespace dart;
     return _modelLoaded;
 }
 
+- (double)totalMass {
+    if (!_modelLoaded || !_skeleton) return 0.0;
+    return _skeleton->getMass();
+}
+
 - (NSInteger)numDOFs {
     if (!_modelLoaded) return 0;
     return (NSInteger)_skeleton->getNumDofs();

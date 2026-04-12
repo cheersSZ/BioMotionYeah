@@ -59,6 +59,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// Whether a model is currently loaded.
 @property (nonatomic, readonly) BOOL isModelLoaded;
 
+/// Total mass of the current skeleton (after scaling), in kilograms.
+/// Returns 0 if no model is loaded.
+@property (nonatomic, readonly) double totalMass;
+
 @end
 
 NS_ASSUME_NONNULL_END
