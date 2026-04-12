@@ -86,21 +86,24 @@ final class NimbleEngine: ObservableObject {
 
     /// Load the bundled .osim model.
     func loadBundledModel() {
-        // Production full-body model: cyclistFullBodyMuscle.osim, shipped
-        // as FullBody.osim in the app bundle. 80 bodies, 520 muscles
-        // (Millard2012 lower + Thelen2003 upper/trunk/spine), covers arm
-        // + detailed spine + ribcage + pelvis + full lower extremity.
+        // HOTFIX (build 12): cyclistFullBodyMuscle.osim crashes nimble's
+        // OpenSimParser at `Joint::setName` because one of its CustomJoints
+        // returns nullptr from createJoint() without NIMBLE_THROW firing in
+        // the release build. Until that's patched in nimble's source (and
+        // libnimble_ios relinked), prefer Rajagopal2016 so the app launches
+        // on device. FullBody.osim stays in the bundle so a fixed nimble
+        // can light it up without re-shipping resources.
         //
-        // Fallback to the old Rajagopal2016 model if FullBody.osim is
-        // missing from the bundle — lets developers hand-drop the old
-        // model back into Resources/ without code changes.
+        // TODO: once nimble createJoint is patched to (a) log the failing
+        // joint name and (b) fall back to a WeldJoint instead of returning
+        // nullptr, flip this order back so FullBody becomes the default.
         let path: String
-        if let fb = Bundle.main.path(forResource: "FullBody", ofType: "osim") {
-            path = fb
-            print("NimbleEngine: loading FullBody.osim (cyclistFullBodyMuscle — 520 muscles)")
-        } else if let raj = Bundle.main.path(forResource: "Rajagopal2016", ofType: "osim") {
+        if let raj = Bundle.main.path(forResource: "Rajagopal2016", ofType: "osim") {
             path = raj
-            print("NimbleEngine: ⚠ FullBody.osim not found — falling back to Rajagopal2016 (81 lower-extremity muscles only)")
+            print("NimbleEngine: loading Rajagopal2016.osim (81 lower-extremity muscles) — FullBody.osim swap deferred pending nimble parser fix")
+        } else if let fb = Bundle.main.path(forResource: "FullBody", ofType: "osim") {
+            path = fb
+            print("NimbleEngine: Rajagopal2016 missing — using FullBody.osim (may crash nimble parser)")
         } else {
             print("NimbleEngine: no .osim model found in bundle")
             return
