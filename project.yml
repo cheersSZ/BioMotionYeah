@@ -1,0 +1,71 @@
+name: BioMotion
+options:
+  bundleIdPrefix: com.soleil
+  deploymentTarget:
+    iOS: "17.0"
+  xcodeVersion: "16.0"
+
+targets:
+  BioMotion:
+    type: application
+    platform: iOS
+    sources:
+      - BioMotion
+    settings:
+      base:
+        INFOPLIST_FILE: BioMotion/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.soleil.BioMotion
+        SWIFT_VERSION: "5.9"
+        DEVELOPMENT_TEAM: "N7VVB6PWZS"
+        MARKETING_VERSION: "1.0.0"
+        CURRENT_PROJECT_VERSION: "8"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_OBJC_BRIDGING_HEADER: BioMotion/Nimble/BioMotion-Bridging-Header.h
+        "LIBRARY_SEARCH_PATHS[sdk=iphoneos*]":
+          - "$(PROJECT_DIR)/nimblephysics/build_ios"
+          - "$(PROJECT_DIR)/osqp/build_ios/out"
+        "LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]":
+          - "$(PROJECT_DIR)/nimblephysics/build_sim"
+          - "$(PROJECT_DIR)/osqp/build_sim/out"
+        HEADER_SEARCH_PATHS:
+          - "$(PROJECT_DIR)/nimblephysics"
+          - "$(PROJECT_DIR)/nimblephysics/third_party/eigen"
+          - "$(PROJECT_DIR)/nimblephysics/third_party/tinyxml2"
+          - "/opt/homebrew/Cellar/boost/1.90.0_1/include"
+          - "$(PROJECT_DIR)/osqp/include/public"
+          - "$(PROJECT_DIR)/osqp/include/private"
+          - "$(PROJECT_DIR)/osqp/build_ios/include/public"
+          - "$(PROJECT_DIR)/osqp/build_sim/include/public"
+        OTHER_LDFLAGS:
+          - "-lnimble_ios"
+          - "-losqpstatic"
+          - "-lc++"
+        CLANG_CXX_LANGUAGE_STANDARD: "c++17"
+        GCC_PREPROCESSOR_DEFINITIONS:
+          - "DART_IOS_BUILD=1"
+          - "DART_USE_IDENTITY_JACOBIAN=1"
+    info:
+      path: BioMotion/Info.plist
+      properties:
+        NSCameraUsageDescription: "BioMotion needs camera access for real-time body tracking and motion analysis."
+        UILaunchScreen: {}
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+  BioMotionTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - BioMotionTests
+      - path: BioMotion/Resources
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: BioMotion
+    settings:
+      base:
+        SWIFT_VERSION: "5.9"
+        GENERATE_INFOPLIST_FILE: "YES"

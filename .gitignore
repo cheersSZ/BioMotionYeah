@@ -1,0 +1,15 @@
+# Build outputs
+build/
+DerivedData/
+*.xcarchive
+
+# Vendored C++ dependencies — cloned/built separately, not committed
+nimblephysics/
+osqp/
+
+# Xcode user state
+xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# macOS
+.DS_Store
