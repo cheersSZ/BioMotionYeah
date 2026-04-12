@@ -7,6 +7,7 @@
 #include <cmath>
 #include <algorithm>
 
+#include <Eigen/Core>
 #include <tinyxml2.h>
 #include "osqp.h"
 
@@ -291,6 +292,12 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
 
     // Previous activations for warm starting
     std::vector<double> _prevActivations;
+
+    // Previous-frame musculotendon lengths, used for finite-differencing
+    // dL_MT/dt to drive the force-velocity curve in the production solver.
+    // Keyed by muscle name (insertion order from the caller) so the caller's
+    // muscle ordering can change between frames without corrupting history.
+    std::map<std::string, double> _prevMuscleLengths;
 }
 
 - (instancetype)init {
@@ -515,6 +522,285 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
     return [[MuscleActivationResult alloc] initWithNames:names
                                              activations:activations
                                                   forces:forces
+                                             solveTimeMs:solveTime
+                                               converged:converged];
+}
+
+// MARK: - Production solver (real moment arms, soft equality, real Hill)
+
+- (nullable MuscleActivationResult *)
+  solveRealWithJointTorques:(NSArray<NSNumber *> *)jointTorques
+                 momentArms:(NSArray<NSNumber *> *)momentArms
+                muscleNames:(NSArray<NSString *> *)muscleNames
+              muscleLengths:(NSArray<NSNumber *> *)muscleLengths
+                  maxForces:(NSArray<NSNumber *> *)maxForces
+        optimalFiberLengths:(NSArray<NSNumber *> *)optimalFiberLengths
+         tendonSlackLengths:(NSArray<NSNumber *> *)tendonSlackLengths
+            pennationAngles:(NSArray<NSNumber *> *)pennationAngles
+            jointVelocities:(NSArray<NSNumber *> *)jointVelocities
+                   dofNames:(NSArray<NSString *> *)dofNames
+                         dt:(double)dt
+                softPenalty:(double)softPenalty {
+
+    const NSInteger nMuscles = muscleNames.count;
+    const NSInteger nDOFs = dofNames.count;
+
+    if (nMuscles == 0 || nDOFs == 0) return nil;
+    if (momentArms.count != (NSUInteger)(nMuscles * nDOFs)) {
+        NSLog(@"MuscleSolver: moment arm matrix has wrong size (%lu vs %ld)",
+              (unsigned long)momentArms.count, (long)(nMuscles * nDOFs));
+        return nil;
+    }
+    if (muscleLengths.count != (NSUInteger)nMuscles ||
+        maxForces.count != (NSUInteger)nMuscles ||
+        optimalFiberLengths.count != (NSUInteger)nMuscles ||
+        tendonSlackLengths.count != (NSUInteger)nMuscles ||
+        pennationAngles.count != (NSUInteger)nMuscles ||
+        jointTorques.count != (NSUInteger)nDOFs ||
+        jointVelocities.count != (NSUInteger)nDOFs) {
+        NSLog(@"MuscleSolver: input array size mismatch");
+        return nil;
+    }
+
+    double startTime = CACurrentMediaTime();
+
+    // --- 1. Per-muscle Hill state (force-length + force-velocity) ---
+    // L_fiber = (L_MT - L_Ts) / cos(α₀)        (rigid-tendon approximation)
+    // L̃      = L_fiber / l_opt                (normalized)
+    // dL_MT/dt via finite difference from previous frame
+    // V_max   = 10 · l_opt                     (default from Millard2012)
+    // Ṽ       = (dL_MT/dt) / V_max              (approximation: ignores tendon velocity)
+    //
+    // Max force at current state:
+    //   F_max_state = F_max · f_AL(L̃) · f_FV(Ṽ) · cos(α₀)
+    //
+    // We enforce this as the only per-frame state-dependent scaling. The
+    // full equilibrium-tendon model requires solving an implicit equation
+    // per muscle per frame, which is too slow for realtime — rigid-tendon
+    // is the standard approximation for online muscle optimization.
+
+    std::vector<double> forceScale(nMuscles);  // F_max * f_AL * f_FV * cos(α)
+    std::vector<double> normFiberLength(nMuscles);
+    std::vector<double> normFiberVelocity(nMuscles);
+
+    for (NSInteger m = 0; m < nMuscles; m++) {
+        double LMT = [muscleLengths[m] doubleValue];
+        double lopt = [optimalFiberLengths[m] doubleValue];
+        double lTs  = [tendonSlackLengths[m] doubleValue];
+        double alpha = [pennationAngles[m] doubleValue];
+        double cosAlpha = std::cos(alpha);
+        double Fmax = [maxForces[m] doubleValue];
+
+        // Guard against zero / negative optimal fiber length.
+        if (lopt <= 1e-6) {
+            forceScale[m] = 0;
+            normFiberLength[m] = 1.0;
+            normFiberVelocity[m] = 0.0;
+            continue;
+        }
+
+        // Rigid-tendon fiber length.
+        double fiberLen = (LMT - lTs) / std::max(cosAlpha, 0.1);
+        double Ltilde = fiberLen / lopt;
+
+        // Force-length: physiological plateau is ~0.5-1.5 normalized length.
+        // Clamp to [0.3, 1.8] to avoid zero force in extreme configurations
+        // (early ARKit frames can produce nonsense poses).
+        Ltilde = std::max(0.3, std::min(1.8, Ltilde));
+
+        // Finite-difference L_MT for velocity. First frame → assume 0.
+        double Vtilde = 0.0;
+        std::string name = std::string([muscleNames[m] UTF8String]);
+        auto it = _prevMuscleLengths.find(name);
+        if (it != _prevMuscleLengths.end() && dt > 1e-5) {
+            double dLdt = (LMT - it->second) / dt;  // m/s along muscle path
+            double Vmax = 10.0 * lopt;              // Millard default
+            Vtilde = dLdt / std::max(Vmax, 1e-6);
+        }
+        _prevMuscleLengths[name] = LMT;
+        // Clamp to avoid edge singularities in Hill curves.
+        Vtilde = std::max(-1.0, std::min(1.0, Vtilde));
+
+        double fAL = muscle::activeForceLengthCurve(Ltilde);
+        double fFV = muscle::forceVelocityCurve(Vtilde);
+
+        forceScale[m] = Fmax * fAL * fFV * cosAlpha;
+        normFiberLength[m] = Ltilde;
+        normFiberVelocity[m] = Vtilde;
+    }
+
+    // --- 2. Build the QP ---
+    // Variables: a ∈ ℝ^nMuscles.
+    // Objective: ½ aᵀ (λ·RᵀR + ε·I) a − λ (τᵀ R) a  + const
+    // where R_row[j] is the row of R·diag(forceScale) corresponding to DOF j.
+    //
+    // We split the full R matrix into ACTIVE DOFs — DOFs that have at
+    // least one non-zero moment-arm entry — and only soft-penalize those.
+    // DOFs with no muscles (e.g. upper body in Rajagopal2016) are ignored.
+    // Unmuscled DOFs are not the muscle solver's responsibility; ID
+    // already published the torques there.
+
+    // Load R (nMuscles × nDOFs, row-major) into dense storage as a
+    // per-column access pattern for the QP construction.
+    // R[m, j] at flat index (m * nDOFs + j).
+    auto R = [&](NSInteger m, NSInteger j) -> double {
+        return [momentArms[m * nDOFs + j] doubleValue];
+    };
+
+    // Compute effective R*forceScale as a nDOFs × nMuscles matrix in
+    // column-major for OSQP ingestion.
+    // A[j, m] = R[m, j] * forceScale[m]  (if DOF j has non-zero moment)
+    // We scan once to find active DOFs so we can drop empty rows.
+
+    std::vector<int> activeDOFs;
+    activeDOFs.reserve(nDOFs);
+    for (NSInteger j = 0; j < nDOFs; j++) {
+        bool any = false;
+        for (NSInteger m = 0; m < nMuscles; m++) {
+            if (std::abs(R(m, j)) > 1e-10) { any = true; break; }
+        }
+        if (any) activeDOFs.push_back((int)j);
+    }
+
+    if (activeDOFs.empty()) {
+        NSLog(@"MuscleSolver: no active DOFs — moment arm matrix is all zero");
+        return nil;
+    }
+
+    const NSInteger nActive = (NSInteger)activeDOFs.size();
+
+    // Build A_eff (nActive × nMuscles): A_eff[k, m] = R[m, dof_k] * fs[m]
+    // Target τ_eff[k] = jointTorques[dof_k]
+    Eigen::MatrixXd Aeff(nActive, nMuscles);
+    Eigen::VectorXd tauEff(nActive);
+    for (NSInteger k = 0; k < nActive; k++) {
+        int j = activeDOFs[k];
+        tauEff(k) = [jointTorques[j] doubleValue];
+        for (NSInteger m = 0; m < nMuscles; m++) {
+            Aeff(k, m) = R(m, j) * forceScale[m];
+        }
+    }
+
+    // Hessian for the full QP objective:
+    //   ½ aᵀ (ε I + λ Aᵀ A) a − λ (τᵀ A) a
+    // Gradient contribution:  g = − λ Aᵀ τ
+    // Note OSQP requires P to be upper triangular.
+
+    const double epsA = 1.0;            // activation cost — prefers small activations
+    const double lambda = softPenalty;  // torque-matching cost
+
+    Eigen::MatrixXd P = epsA * Eigen::MatrixXd::Identity(nMuscles, nMuscles)
+                      + lambda * Aeff.transpose() * Aeff;
+    Eigen::VectorXd g = -lambda * Aeff.transpose() * tauEff;
+
+    // Bounds: 0.01 ≤ a ≤ 1. OSQP requires constraints Ax ∈ [l, u], so we
+    // use A = I, l = 0.01·1, u = 1·1.
+    const double aMin = 0.01;
+    const double aMax = 1.0;
+
+    // Build P in CSC upper-triangular form.
+    std::vector<OSQPInt> P_col_ptr(nMuscles + 1, 0);
+    std::vector<OSQPInt> P_row_idx;
+    std::vector<OSQPFloat> P_val;
+    P_row_idx.reserve(nMuscles * (nMuscles + 1) / 2);
+    P_val.reserve(nMuscles * (nMuscles + 1) / 2);
+    for (NSInteger col = 0; col < nMuscles; col++) {
+        P_col_ptr[col] = (OSQPInt)P_row_idx.size();
+        for (NSInteger row = 0; row <= col; row++) {
+            double v = P(row, col);
+            if (std::abs(v) > 1e-12 || row == col) {
+                P_row_idx.push_back((OSQPInt)row);
+                P_val.push_back((OSQPFloat)v);
+            }
+        }
+    }
+    P_col_ptr[nMuscles] = (OSQPInt)P_row_idx.size();
+
+    // Identity A matrix in CSC.
+    std::vector<OSQPInt> A_col_ptr(nMuscles + 1);
+    std::vector<OSQPInt> A_row_idx(nMuscles);
+    std::vector<OSQPFloat> A_val(nMuscles, 1.0);
+    for (NSInteger i = 0; i < nMuscles; i++) {
+        A_col_ptr[i] = (OSQPInt)i;
+        A_row_idx[i] = (OSQPInt)i;
+    }
+    A_col_ptr[nMuscles] = (OSQPInt)nMuscles;
+
+    std::vector<OSQPFloat> qVec(nMuscles);
+    for (NSInteger i = 0; i < nMuscles; i++) qVec[i] = (OSQPFloat)g(i);
+
+    std::vector<OSQPFloat> lVec(nMuscles, (OSQPFloat)aMin);
+    std::vector<OSQPFloat> uVec(nMuscles, (OSQPFloat)aMax);
+
+    OSQPCscMatrix P_csc, A_csc;
+    OSQPCscMatrix_set_data(&P_csc, (OSQPInt)nMuscles, (OSQPInt)nMuscles,
+                           (OSQPInt)P_val.size(), P_val.data(),
+                           P_row_idx.data(), P_col_ptr.data());
+    OSQPCscMatrix_set_data(&A_csc, (OSQPInt)nMuscles, (OSQPInt)nMuscles,
+                           (OSQPInt)A_val.size(), A_val.data(),
+                           A_row_idx.data(), A_col_ptr.data());
+
+    if (_solver) {
+        osqp_cleanup(_solver);
+        _solver = nullptr;
+    }
+
+    OSQPSettings settings;
+    osqp_set_default_settings(&settings);
+    settings.max_iter = 200;
+    settings.eps_abs = 1e-3;
+    settings.eps_rel = 1e-3;
+    settings.verbose = false;
+    settings.warm_starting = true;
+    settings.polishing = false;
+
+    OSQPInt exitflag = osqp_setup(&_solver, &P_csc, qVec.data(), &A_csc,
+                                  lVec.data(), uVec.data(),
+                                  (OSQPInt)nMuscles, (OSQPInt)nMuscles,
+                                  &settings);
+    if (exitflag != 0 || !_solver) {
+        NSLog(@"MuscleSolver: OSQP setup failed with code %d", (int)exitflag);
+        return nil;
+    }
+
+    // Warm start from previous frame.
+    if (_prevActivations.size() == (size_t)nMuscles) {
+        osqp_warm_start(_solver, _prevActivations.data(), nullptr);
+    } else {
+        _prevActivations.assign(nMuscles, 0.05);
+    }
+
+    osqp_solve(_solver);
+
+    BOOL converged = (_solver->info->status_val == OSQP_SOLVED ||
+                      _solver->info->status_val == OSQP_SOLVED_INACCURATE);
+
+    NSMutableArray<NSString *> *outNames =
+        [NSMutableArray arrayWithCapacity:nMuscles];
+    NSMutableArray<NSNumber *> *outActivations =
+        [NSMutableArray arrayWithCapacity:nMuscles];
+    NSMutableArray<NSNumber *> *outForces =
+        [NSMutableArray arrayWithCapacity:nMuscles];
+
+    for (NSInteger m = 0; m < nMuscles; m++) {
+        double a = converged
+            ? std::clamp((double)_solver->solution->x[m], aMin, aMax)
+            : aMin;
+        double f = a * forceScale[m];
+        [outNames addObject:muscleNames[m]];
+        [outActivations addObject:@(a)];
+        [outForces addObject:@(f)];
+        _prevActivations[m] = a;
+    }
+
+    double solveTime = (CACurrentMediaTime() - startTime) * 1000.0;
+
+    osqp_cleanup(_solver);
+    _solver = nullptr;
+
+    return [[MuscleActivationResult alloc] initWithNames:outNames
+                                             activations:outActivations
+                                                  forces:outForces
                                              solveTimeMs:solveTime
                                                converged:converged];
 }

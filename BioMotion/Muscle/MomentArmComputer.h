@@ -41,6 +41,26 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NSArray<NSNumber *> *)computeMomentArmsWithJointAngles:(NSArray<NSNumber *> *)jointAngles
                                                           dofNames:(NSArray<NSString *> *)dofNames;
 
+/// Current musculotendon path lengths L_MT(q) for all parsed muscles, at the
+/// skeleton's CURRENT pose (as left by the most recent call to
+/// computeMomentArmsWithJointAngles:dofNames:). Lengths are in meters.
+/// Returns an array of size numMuscles.
+@property (nonatomic, readonly) NSArray<NSNumber *> *currentMuscleLengths;
+
+/// Maximum isometric force F_max for each parsed muscle, in newtons.
+/// Array of size numMuscles, in the same order as currentMuscleLengths.
+@property (nonatomic, readonly) NSArray<NSNumber *> *maxIsometricForces;
+
+/// Optimal fiber length l_opt for each muscle, in meters.
+@property (nonatomic, readonly) NSArray<NSNumber *> *optimalFiberLengths;
+
+/// Tendon slack length l_Ts for each muscle, in meters. Falls back to
+/// 0.0 if the underlying path did not parse this field.
+@property (nonatomic, readonly) NSArray<NSNumber *> *tendonSlackLengths;
+
+/// Pennation angle α₀ at optimal fiber length, in radians.
+@property (nonatomic, readonly) NSArray<NSNumber *> *pennationAngles;
+
 /// Get the muscle path data for a specific muscle.
 - (nullable MusclePathData *)musclePathDataForName:(NSString *)name;
 

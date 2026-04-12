@@ -75,6 +75,10 @@ final class NimbleEngine: ObservableObject {
     // cleaner numerical derivatives than naive finite differences.
     private var dofFilters: [SavitzkyGolayFilter] = []
 
+    // Timestamp of the last successful muscle solve, used to derive dt for
+    // musculotendon length finite differencing inside the muscle Hill model.
+    private var lastMuscleSolveTimestamp: TimeInterval?
+
     // IK history for recording
     private(set) var ikHistory: [(timestamp: TimeInterval, angles: [String: Double], error: Double)] = []
     private(set) var idHistory: [(timestamp: TimeInterval, jointTorques: [String: Double])] = []
@@ -262,33 +266,73 @@ final class NimbleEngine: ObservableObject {
             }
 
             // --- Muscle static optimization (on same SG-centered state) ---
+            // Production path: real moment arms from FK + soft-equality QP +
+            // real Hill-model force-length/velocity. Requires that the
+            // skeleton is at the smoothed pose, which solveIDGRF() already
+            // sets when it runs — MomentArmComputer picks up from there.
             var muscleOutput: MuscleOutput?
             var muscleTime = 0.0
 
             if let id = idOutput {
-                let torqueKeys = Array(id.jointTorques.keys)
+                // IMPORTANT: jointTorques arrives as a dictionary, which has
+                // no defined order. We must force a consistent ordering here
+                // so that `dofNames[i]` refers to the same DOF as `torques[i]`
+                // AND as the j-th column of the moment-arm matrix. Use the
+                // DOF names from IK (they are in skeleton order).
+                let torqueKeys: [String] = ikResult.dofNames as [String]
                 let torqueVals = torqueKeys.map { NSNumber(value: id.jointTorques[$0] ?? 0) }
 
-                if let result = self.muscleSolver.solve(
-                    withJointTorques: torqueVals,
-                    jointAngles: smoothedQNS,
-                    jointVelocities: smoothedDQNS,
+                // Compute the moment-arm matrix R(q) at the smoothed pose.
+                // MomentArmComputer runs its own FK so it expects the pose
+                // to be driven through setPositions. Pass the SG-smoothed q.
+                let momentArms = self.momentArmComputer.computeMomentArms(
+                    withJointAngles: smoothedQNS,
                     dofNames: torqueKeys
-                ) {
-                    muscleTime = result.solveTimeMs
+                ) ?? []
+                let muscleLengthsNS = self.momentArmComputer.currentMuscleLengths
+                let muscleNamesNS = self.momentArmComputer.muscleNames
+                let maxForcesNS = self.momentArmComputer.maxIsometricForces
+                let optimalFibersNS = self.momentArmComputer.optimalFiberLengths
+                let tendonSlacksNS = self.momentArmComputer.tendonSlackLengths
+                let pennationsNS = self.momentArmComputer.pennationAngles
 
-                    var activations: [String: Double] = [:]
-                    var forces: [String: Double] = [:]
-                    for i in 0..<result.muscleNames.count {
-                        activations[result.muscleNames[i]] = result.activations[i].doubleValue
-                        forces[result.muscleNames[i]] = result.forces[i].doubleValue
+                if !momentArms.isEmpty && muscleNamesNS.count > 0 {
+                    // dt for fiber-velocity finite differencing. We use the
+                    // SG-window centered timestamp vs. the previous frame's.
+                    let nowSec = centerTimestamp
+                    let dt = max(nowSec - (self.lastMuscleSolveTimestamp ?? nowSec - 0.0167),
+                                 1e-3)
+                    self.lastMuscleSolveTimestamp = nowSec
+
+                    if let result = self.muscleSolver.solveReal(
+                        withJointTorques: torqueVals,
+                        momentArms: momentArms,
+                        muscleNames: muscleNamesNS,
+                        muscleLengths: muscleLengthsNS,
+                        maxForces: maxForcesNS,
+                        optimalFiberLengths: optimalFibersNS,
+                        tendonSlackLengths: tendonSlacksNS,
+                        pennationAngles: pennationsNS,
+                        jointVelocities: smoothedDQNS,
+                        dofNames: torqueKeys,
+                        dt: dt,
+                        softPenalty: 1.0
+                    ) {
+                        muscleTime = result.solveTimeMs
+
+                        var activations: [String: Double] = [:]
+                        var forces: [String: Double] = [:]
+                        for i in 0..<result.muscleNames.count {
+                            activations[result.muscleNames[i]] = result.activations[i].doubleValue
+                            forces[result.muscleNames[i]] = result.forces[i].doubleValue
+                        }
+                        muscleOutput = MuscleOutput(
+                            activations: activations,
+                            forces: forces,
+                            converged: result.converged,
+                            timestamp: centerTimestamp
+                        )
                     }
-                    muscleOutput = MuscleOutput(
-                        activations: activations,
-                        forces: forces,
-                        converged: result.converged,
-                        timestamp: centerTimestamp
-                    )
                 }
             }
 

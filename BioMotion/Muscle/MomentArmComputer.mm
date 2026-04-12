@@ -26,6 +26,7 @@ struct InternalMusclePath {
     std::vector<InternalPathPoint> points;
     double maxIsometricForce;
     double optimalFiberLength;
+    double tendonSlackLength;
     double pennationAngle;
 };
 
@@ -128,6 +129,7 @@ struct InternalMusclePath {
 
         mp.maxIsometricForce = readDouble("max_isometric_force");
         mp.optimalFiberLength = readDouble("optimal_fiber_length");
+        mp.tendonSlackLength = readDouble("tendon_slack_length");
         mp.pennationAngle = readDouble("pennation_angle_at_optimal");
 
         // Parse GeometryPath → PathPointSet → PathPoint
@@ -318,6 +320,44 @@ struct InternalMusclePath {
     _skeleton->setPositions(q);
 
     return momentArms;
+}
+
+- (NSArray<NSNumber *> *)currentMuscleLengths {
+    if (!_loaded || !_skeleton) return @[];
+    NSMutableArray<NSNumber *> *lengths =
+        [NSMutableArray arrayWithCapacity:_musclePaths.size()];
+    for (NSInteger i = 0; i < (NSInteger)_musclePaths.size(); i++) {
+        [lengths addObject:@([self computeMuscleLengthForIndex:i])];
+    }
+    return lengths;
+}
+
+- (NSArray<NSNumber *> *)maxIsometricForces {
+    NSMutableArray<NSNumber *> *forces =
+        [NSMutableArray arrayWithCapacity:_musclePaths.size()];
+    for (const auto& mp : _musclePaths) [forces addObject:@(mp.maxIsometricForce)];
+    return forces;
+}
+
+- (NSArray<NSNumber *> *)optimalFiberLengths {
+    NSMutableArray<NSNumber *> *lens =
+        [NSMutableArray arrayWithCapacity:_musclePaths.size()];
+    for (const auto& mp : _musclePaths) [lens addObject:@(mp.optimalFiberLength)];
+    return lens;
+}
+
+- (NSArray<NSNumber *> *)tendonSlackLengths {
+    NSMutableArray<NSNumber *> *lens =
+        [NSMutableArray arrayWithCapacity:_musclePaths.size()];
+    for (const auto& mp : _musclePaths) [lens addObject:@(mp.tendonSlackLength)];
+    return lens;
+}
+
+- (NSArray<NSNumber *> *)pennationAngles {
+    NSMutableArray<NSNumber *> *angs =
+        [NSMutableArray arrayWithCapacity:_musclePaths.size()];
+    for (const auto& mp : _musclePaths) [angs addObject:@(mp.pennationAngle)];
+    return angs;
 }
 
 @end
