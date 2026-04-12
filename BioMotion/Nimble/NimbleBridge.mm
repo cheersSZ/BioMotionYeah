@@ -98,32 +98,71 @@ using namespace dart;
         }
 
         // Register virtual markers at joint centers for ARKit compatibility.
-        // ARKit gives us joint center positions, not surface marker positions.
-        // Map our JointMapping names to the appropriate body nodes at their origins.
-        struct VirtualMarker { const char* name; const char* bodyName; };
+        // ARKit gives us joint-center positions, not surface-marker positions,
+        // so we attach one marker per body at a well-defined local point.
+        //
+        // For Rajagopal2016 the spine is a single rigid `torso` body from pelvis
+        // top to shoulders; there are no separate lumbar/thoracic/cervical/head
+        // segments. We still want ARKit's spine/C7/neck/head markers to feed IK
+        // (they help constrain torso orientation), so we attach them to the
+        // torso body at heuristic vertical offsets that approximate where the
+        // real landmarks sit along an average torso. MarkerFitter in M6 will
+        // refine these offsets per subject.
+        //
+        // Each entry: ARKit marker name -> (body name, local offset in meters).
+        struct VirtualMarker {
+            const char* name;
+            const char* bodyName;
+            double offsetX, offsetY, offsetZ;
+        };
         VirtualMarker virtualMarkers[] = {
-            {"PELVIS", "pelvis"},
-            {"LHJC", "femur_l"},    {"RHJC", "femur_r"},
-            {"LKJC", "tibia_l"},    {"RKJC", "tibia_r"},
-            {"LAJC", "talus_l"},    {"RAJC", "talus_r"},
-            {"LTOE", "toes_l"},     {"RTOE", "toes_r"},
-            {"SPINE_L", "lumbar5"}, {"SPINE_M", "lumbar3"},
-            {"C7", "thorax"},       {"NECK", "thorax"},
-            {"HEAD", "head"},
-            {"LSJC", "humerus_l"},  {"RSJC", "humerus_r"},
-            {"LEJC", "ulna_l"},     {"REJC", "ulna_r"},
-            {"LWJC", "hand_l"},     {"RWJC", "hand_r"},
+            // Pelvis / lower extremities — all at body origin (= joint center)
+            {"PELVIS",  "pelvis",   0.0,  0.0,  0.0},
+            {"LHJC",    "femur_l",  0.0,  0.0,  0.0},
+            {"RHJC",    "femur_r",  0.0,  0.0,  0.0},
+            {"LKJC",    "tibia_l",  0.0,  0.0,  0.0},
+            {"RKJC",    "tibia_r",  0.0,  0.0,  0.0},
+            {"LAJC",    "talus_l",  0.0,  0.0,  0.0},
+            {"RAJC",    "talus_r",  0.0,  0.0,  0.0},
+            {"LTOE",    "toes_l",   0.0,  0.0,  0.0},
+            {"RTOE",    "toes_r",   0.0,  0.0,  0.0},
+            // Torso (single rigid segment in Rajagopal2016) — distribute markers
+            // up the body's +Y axis (torso body Y points from base to top).
+            {"SPINE_L", "torso",    0.0,  0.10, 0.0},
+            {"SPINE_M", "torso",    0.0,  0.22, 0.0},
+            {"C7",      "torso",    0.0,  0.38, 0.0},
+            {"NECK",    "torso",    0.0,  0.44, 0.0},
+            {"HEAD",    "torso",    0.0,  0.58, 0.0},
+            // Upper extremities — joint centers at each body's origin.
+            {"LSJC",    "humerus_l", 0.0, 0.0,  0.0},
+            {"RSJC",    "humerus_r", 0.0, 0.0,  0.0},
+            {"LEJC",    "ulna_l",    0.0, 0.0,  0.0},
+            {"REJC",    "ulna_r",    0.0, 0.0,  0.0},
+            {"LWJC",    "hand_l",    0.0, 0.0,  0.0},
+            {"RWJC",    "hand_r",    0.0, 0.0,  0.0},
         };
 
         int addedVirtual = 0;
+        NSMutableArray<NSString *> *missingBodies = [NSMutableArray array];
         for (const auto& vm : virtualMarkers) {
             dynamics::BodyNode* body = _skeleton->getBodyNode(std::string(vm.bodyName));
             if (body) {
-                _markers[std::string(vm.name)] = {body, Eigen::Vector3s::Zero()};
+                _markers[std::string(vm.name)] = {
+                    body,
+                    Eigen::Vector3s(vm.offsetX, vm.offsetY, vm.offsetZ)
+                };
                 addedVirtual++;
+            } else {
+                [missingBodies addObject:
+                    [NSString stringWithFormat:@"%s(→%s)", vm.name, vm.bodyName]];
             }
         }
-        NSLog(@"NimbleBridge: Added %d virtual markers at joint centers", addedVirtual);
+        NSLog(@"NimbleBridge: Added %d/%lu virtual markers at joint centers",
+              addedVirtual, sizeof(virtualMarkers)/sizeof(virtualMarkers[0]));
+        if (missingBodies.count > 0) {
+            NSLog(@"NimbleBridge: Skipped markers with missing bodies: %@",
+                  [missingBodies componentsJoinedByString:@", "]);
+        }
 
         _modelLoaded = YES;
         NSLog(@"NimbleBridge: Loaded model with %ld DOFs, %lu markers",
@@ -176,11 +215,138 @@ using namespace dart;
                  markerNames:(NSArray<NSString *> *)markerNames {
     if (!_modelLoaded) return NO;
 
-    // Simple scaling: scale all body segments by height ratio
-    // Default model height is approximately 1.8m
-    double scaleFactor = height / 1.8;
-    _skeleton->setBodyScales(Eigen::VectorXs::Constant(
-        _skeleton->getNumBodyNodes() * 3, scaleFactor));
+    // Per-segment anthropometric scaling.
+    //
+    // Uniform height-ratio scaling (the previous implementation) is wrong:
+    // real anthropometry varies between segments even for subjects of the
+    // same height (e.g. limb length relative to height varies ±5%).
+    //
+    // If the IK pass has already been run and `markerPositions` contain
+    // joint-center positions, we derive per-group scale factors directly
+    // from inter-joint distances measured in the ARKit world:
+    //
+    //   lower-limb scale = (hip→ankle distance, averaged L/R) / model default
+    //   trunk scale      = (pelvis→shoulder-midpoint distance) / model default
+    //   upper-limb scale = (shoulder→wrist distance, averaged L/R) / model default
+    //
+    // If markers are missing, we fall back to height/1.8 for that group.
+    //
+    // For Rajagopal2016 with default male proportions the approximate
+    // reference segment lengths at 1.8m standing height are:
+    //   lower extremity (hip→ankle)    ≈ 0.88 m
+    //   trunk (pelvis→shoulder midpt)  ≈ 0.52 m
+    //   upper extremity (shoulder→wrist) ≈ 0.54 m
+
+    auto markerWorld = [&](const std::string& name) -> Eigen::Vector3s {
+        for (NSUInteger i = 0; i < markerNames.count; i++) {
+            if (std::string([markerNames[i] UTF8String]) == name &&
+                i * 3 + 2 < markerPositions.count) {
+                return Eigen::Vector3s(
+                    [markerPositions[i * 3 + 0] doubleValue],
+                    [markerPositions[i * 3 + 1] doubleValue],
+                    [markerPositions[i * 3 + 2] doubleValue]
+                );
+            }
+        }
+        return Eigen::Vector3s::Zero();
+    };
+    auto hasMarker = [&](const std::string& name) -> bool {
+        for (NSUInteger i = 0; i < markerNames.count; i++) {
+            if (std::string([markerNames[i] UTF8String]) == name) return true;
+        }
+        return false;
+    };
+
+    const double fallbackScale = height / 1.8;
+
+    auto segLength = [&](const std::string& a, const std::string& b) -> double {
+        if (!hasMarker(a) || !hasMarker(b)) return -1.0;
+        return (markerWorld(a) - markerWorld(b)).norm();
+    };
+
+    // Lower extremity: average of L and R
+    double lowerScale = fallbackScale;
+    double lhl = segLength("LHJC", "LAJC");
+    double rhl = segLength("RHJC", "RAJC");
+    std::vector<double> lowerLengths;
+    if (lhl > 0) lowerLengths.push_back(lhl);
+    if (rhl > 0) lowerLengths.push_back(rhl);
+    if (!lowerLengths.empty()) {
+        double avg = 0;
+        for (double l : lowerLengths) avg += l;
+        avg /= lowerLengths.size();
+        lowerScale = avg / 0.88;  // reference lower-limb length at 1.8m height
+    }
+
+    // Upper extremity: average of L and R
+    double upperScale = fallbackScale;
+    double lal = segLength("LSJC", "LWJC");
+    double ral = segLength("RSJC", "RWJC");
+    std::vector<double> upperLengths;
+    if (lal > 0) upperLengths.push_back(lal);
+    if (ral > 0) upperLengths.push_back(ral);
+    if (!upperLengths.empty()) {
+        double avg = 0;
+        for (double l : upperLengths) avg += l;
+        avg /= upperLengths.size();
+        upperScale = avg / 0.54;  // reference upper-limb length at 1.8m height
+    }
+
+    // Trunk: pelvis to midpoint of shoulders
+    double trunkScale = fallbackScale;
+    if (hasMarker("PELVIS") && hasMarker("LSJC") && hasMarker("RSJC")) {
+        Eigen::Vector3s p = markerWorld("PELVIS");
+        Eigen::Vector3s shoulderMid = 0.5 * (markerWorld("LSJC") + markerWorld("RSJC"));
+        double len = (shoulderMid - p).norm();
+        if (len > 0.1) {
+            trunkScale = len / 0.52;  // reference pelvis→shoulder length at 1.8m
+        }
+    }
+
+    // Clamp to sensible anthropometric bounds so a bad single frame can't
+    // blow up the skeleton (e.g. partially-tracked frame with wrist near ground).
+    auto clampScale = [](double s) { return std::max(0.7, std::min(1.4, s)); };
+    lowerScale = clampScale(lowerScale);
+    upperScale = clampScale(upperScale);
+    trunkScale = clampScale(trunkScale);
+
+    // Assign per-body scale: nimble expects a flat VectorXs of size 3*numBodies
+    // arranged as [x,y,z, x,y,z, ...]. We group each body into lower/trunk/upper.
+    size_t numBodies = _skeleton->getNumBodyNodes();
+    Eigen::VectorXs bodyScales(numBodies * 3);
+
+    auto groupScale = [&](const std::string& bodyName) -> double {
+        // Upper extremity bodies
+        if (bodyName.find("humerus") != std::string::npos ||
+            bodyName.find("radius") != std::string::npos ||
+            bodyName.find("ulna") != std::string::npos ||
+            bodyName.find("hand") != std::string::npos) {
+            return upperScale;
+        }
+        // Lower extremity bodies
+        if (bodyName.find("femur") != std::string::npos ||
+            bodyName.find("tibia") != std::string::npos ||
+            bodyName.find("patella") != std::string::npos ||
+            bodyName.find("talus") != std::string::npos ||
+            bodyName.find("calcn") != std::string::npos ||
+            bodyName.find("toes") != std::string::npos) {
+            return lowerScale;
+        }
+        // Torso, pelvis, head, neck → trunk
+        return trunkScale;
+    };
+
+    for (size_t i = 0; i < numBodies; i++) {
+        auto* body = _skeleton->getBodyNode(i);
+        double s = groupScale(body->getName());
+        bodyScales(i * 3 + 0) = s;
+        bodyScales(i * 3 + 1) = s;
+        bodyScales(i * 3 + 2) = s;
+    }
+    _skeleton->setBodyScales(bodyScales);
+
+    NSLog(@"NimbleBridge: Per-segment scale — lower %.3f, trunk %.3f, upper %.3f (height fallback %.3f)",
+          lowerScale, trunkScale, upperScale, fallbackScale);
 
     return YES;
 }
