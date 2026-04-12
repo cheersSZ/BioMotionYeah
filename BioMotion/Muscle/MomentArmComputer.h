@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 
+@class NimbleBridge;
+
 NS_ASSUME_NONNULL_BEGIN
 
 /// Parsed muscle path point (body name + local offset).
@@ -24,10 +26,19 @@ NS_ASSUME_NONNULL_BEGIN
 /// points to world coordinates and compute total muscle-tendon path length.
 @interface MomentArmComputer : NSObject
 
-/// Parse muscle path geometry from a .osim file.
-/// @param path Path to the .osim file.
+/// Parse muscle path geometry from a .osim file and adopt the skeleton
+/// from a pre-loaded NimbleBridge. This avoids re-parsing the .osim and,
+/// crucially, uses the SAME skeleton instance that NimbleBridge has
+/// already scaled via `scaleModelWithHeight:` — otherwise per-segment
+/// scaling never propagates to moment-arm / muscle-length computation.
+///
+/// @param path  Path to the .osim file (read for muscle GeometryPath
+///              definitions only; the skeleton is NOT re-parsed).
+/// @param bridge A NimbleBridge whose model has already been loaded.
+///              Its `sharedSkeleton` must be non-null.
 /// @return YES if muscles were parsed successfully.
-- (BOOL)parseMusclePathsFromOsimPath:(NSString *)path;
+- (BOOL)parseMusclePathsFromOsimPath:(NSString *)path
+                          fromBridge:(NimbleBridge *)bridge;
 
 /// Number of muscles with parsed paths.
 @property (nonatomic, readonly) NSInteger numMuscles;

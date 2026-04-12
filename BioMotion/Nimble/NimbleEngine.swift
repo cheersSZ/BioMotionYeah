@@ -95,7 +95,11 @@ final class NimbleEngine: ObservableObject {
             let success = self.bridge.loadModel(fromPath: path)
             if success {
                 self.muscleSolver.loadMuscles(fromOsimPath: path)
-                self.momentArmComputer.parseMusclePaths(fromOsimPath: path)
+                // MomentArmComputer adopts the bridge's skeleton instead of
+                // parsing a second copy — so per-segment scaling propagates
+                // from bridge.scaleModelWithHeight through to R(q) and L_MT.
+                self.momentArmComputer.parseMusclePaths(fromOsimPath: path,
+                                                         from: self.bridge)
                 // Drop any stale SG state from a previous model — the new
                 // model may have a different DOF count / ordering, and even
                 // if not, the sample history is no longer valid.

@@ -1,15 +1,17 @@
 #import "MomentArmComputer.h"
+#import "../Nimble/NimbleBridge+Internal.h"
 
 #include <vector>
 #include <string>
 #include <map>
+#include <set>
 #include <cmath>
 
 #include <tinyxml2.h>
 
 #include "dart/dynamics/Skeleton.hpp"
 #include "dart/dynamics/BodyNode.hpp"
-#include "dart/biomechanics/OpenSimParser.hpp"
+#include "dart/dynamics/DegreeOfFreedom.hpp"
 #include "dart/math/MathTypes.hpp"
 
 using namespace dart;
@@ -89,15 +91,24 @@ struct InternalMusclePath {
     return self;
 }
 
-- (BOOL)parseMusclePathsFromOsimPath:(NSString *)path {
+- (BOOL)parseMusclePathsFromOsimPath:(NSString *)path
+                          fromBridge:(NimbleBridge *)bridge {
     std::string pathStr([path UTF8String]);
 
-    // Load skeleton via Nimble
-    auto osimFile = biomechanics::OpenSimParser::parseOsim(pathStr);
-    if (!osimFile.skeleton) return NO;
-    _skeleton = osimFile.skeleton;
+    // Adopt the skeleton that NimbleBridge has already loaded and scaled.
+    // This is the single source of truth — any setBodyScales /
+    // setPositions called on the bridge is instantly visible here.
+    _skeleton = [bridge sharedSkeleton];
+    if (!_skeleton) {
+        NSLog(@"MomentArmComputer: NimbleBridge has no skeleton yet — "
+              @"did you call loadModel first?");
+        return NO;
+    }
 
-    // Parse muscle paths from XML directly (Nimble doesn't parse muscles)
+    // Parse muscle paths from XML (nimble OpenSimParser reads the
+    // kinematic skeleton but doesn't expose the muscle GeometryPath
+    // data we need for moment-arm FK, so we parse the relevant sections
+    // directly).
     tinyxml2::XMLDocument doc;
     if (doc.LoadFile(pathStr.c_str()) != tinyxml2::XML_SUCCESS) return NO;
 
@@ -181,8 +192,48 @@ struct InternalMusclePath {
         }
     }
 
+    // Validate that every PathPoint resolves to a real body in the
+    // shared skeleton. If not, the muscle-length FK will silently
+    // fall back to raw local offsets and the muscle's moment arm
+    // will be identically zero, pinning it to activation lower bound.
+    // Collect the violations so the user sees them once at load time
+    // instead of discovering them as "that muscle never activates".
+    std::set<std::string> unresolvedBodies;
+    std::map<std::string, int> unresolvedCounts;
+    int unresolvedMuscles = 0;
+    for (const auto& mp : _musclePaths) {
+        bool anyMiss = false;
+        for (const auto& pp : mp.points) {
+            if (_skeleton->getBodyNode(pp.bodyName) == nullptr) {
+                unresolvedBodies.insert(pp.bodyName);
+                unresolvedCounts[pp.bodyName]++;
+                anyMiss = true;
+            }
+        }
+        if (anyMiss) unresolvedMuscles++;
+    }
+
     _loaded = !_musclePaths.empty();
-    NSLog(@"MomentArmComputer: Parsed %lu muscle paths", (unsigned long)_musclePaths.size());
+    NSLog(@"MomentArmComputer: Parsed %lu muscle paths (skeleton has %lu bodies)",
+          (unsigned long)_musclePaths.size(),
+          (unsigned long)_skeleton->getNumBodyNodes());
+    if (!unresolvedBodies.empty()) {
+        NSMutableArray<NSString *> *bodyList = [NSMutableArray array];
+        for (const auto& name : unresolvedBodies) {
+            int count = unresolvedCounts[name];
+            [bodyList addObject:
+                [NSString stringWithFormat:@"%s(×%d)", name.c_str(), count]];
+        }
+        NSLog(@"MomentArmComputer: ⚠ %d muscles reference %lu unresolved body names: %@",
+              unresolvedMuscles,
+              (unsigned long)unresolvedBodies.size(),
+              [bodyList componentsJoinedByString:@", "]);
+        NSLog(@"MomentArmComputer: ⚠ Those muscles will have zero moment arm "
+              @"and will be pinned to activation lower bound. "
+              @"Check for mismatched body names between muscle path points "
+              @"and skeleton (socket path prefix handling, locale differences, "
+              @"newer OpenSim XML formats).");
+    }
     return _loaded;
 }
 
@@ -235,9 +286,12 @@ struct InternalMusclePath {
 }
 
 /// Transform a path point from body-local coordinates to world coordinates.
+/// Load-time validation in `parseMusclePathsFromOsimPath:fromBridge:`
+/// already reports every muscle with an unresolved path-point body, so
+/// silent fallback here is still safe at runtime (no NSLog spam at 60 fps).
 - (Eigen::Vector3s)worldPositionForPathPoint:(const InternalPathPoint&)pp {
     dynamics::BodyNode* body = _skeleton->getBodyNode(pp.bodyName);
-    if (!body) return pp.localOffset;  // fallback
+    if (!body) return pp.localOffset;  // already reported at load time
 
     Eigen::Isometry3s worldTransform = body->getWorldTransform();
     return worldTransform * pp.localOffset;

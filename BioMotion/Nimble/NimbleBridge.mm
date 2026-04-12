@@ -1,4 +1,5 @@
 #import "NimbleBridge.h"
+#import "NimbleBridge+Internal.h"
 
 #include <vector>
 #include <string>
@@ -242,6 +243,17 @@ using namespace dart;
 - (double)totalMass {
     if (!_modelLoaded || !_skeleton) return 0.0;
     return _skeleton->getMass();
+}
+
+#pragma mark - NimbleBridge (Internal)
+
+- (std::shared_ptr<dart::dynamics::Skeleton>)sharedSkeleton {
+    // Returns the live shared_ptr. If no model is loaded this is a null
+    // shared_ptr, which is an explicit "no skeleton yet" signal to callers
+    // like MomentArmComputer. Any mutation through this pointer (positions,
+    // body scales, external forces) is shared with every other holder —
+    // intentional, so scaling and IK state stay consistent across objects.
+    return _skeleton;
 }
 
 - (NSInteger)numDOFs {
