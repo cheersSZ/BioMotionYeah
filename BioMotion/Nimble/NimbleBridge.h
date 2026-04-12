@@ -13,6 +13,21 @@ NS_ASSUME_NONNULL_BEGIN
 /// Result from inverse dynamics solve.
 @interface NimbleIDResult : NSObject
 @property (nonatomic, readonly) NSArray<NSNumber *> *jointTorques;  // Nm per DOF
+
+// Ground reaction force diagnostics (valid only for ID-with-GRF variants).
+// World-frame 3-vectors in newtons and meters respectively. Zero vectors when
+// the foot was not in contact on this frame.
+@property (nonatomic, readonly) NSArray<NSNumber *> *leftFootForce;   // [fx, fy, fz] N
+@property (nonatomic, readonly) NSArray<NSNumber *> *rightFootForce;  // [fx, fy, fz] N
+@property (nonatomic, readonly) NSArray<NSNumber *> *leftFootCoP;     // [x, y, z] m
+@property (nonatomic, readonly) NSArray<NSNumber *> *rightFootCoP;    // [x, y, z] m
+@property (nonatomic, readonly) BOOL leftFootInContact;
+@property (nonatomic, readonly) BOOL rightFootInContact;
+/// Norm of the 6D residual at the free (root) joint — a measure of how well
+/// the GRF solution reconciles with the inertial state. Should be small
+/// (< ~10 Nm total) when GRF is correctly estimated. Large values mean the
+/// contact model is wrong (wrong ground height, missed contact, airborne).
+@property (nonatomic, readonly) double rootResidualNorm;
 @end
 
 /// C++ bridge to nimblephysics IK and ID solvers.
@@ -55,6 +70,36 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable NimbleIDResult *)solveIDWithJointAngles:(NSArray<NSNumber *> *)jointAngles
                                    jointVelocities:(NSArray<NSNumber *> *)jointVelocities
                                jointAccelerations:(NSArray<NSNumber *> *)jointAccelerations;
+
+/// Run inverse dynamics with automatic ground reaction force estimation.
+///
+/// Detects which feet are in contact with the ground (based on `calcn_l` and
+/// `calcn_r` body position versus the current ground height) and uses
+/// Nimble's multi-contact near-CoP ID solver to decompose the system wrench
+/// into per-foot GRFs + joint torques. This is the physically correct way
+/// to run ID for any scenario where the subject has ground contact (standing,
+/// walking, squatting, sit-to-stand). Use `solveIDWithJointAngles:...` only
+/// for pure flight-phase motions.
+///
+/// @param jointAngles       Smoothed joint angles from IK (q).
+/// @param jointVelocities   Smoothed joint velocities (dq), temporally aligned with q.
+/// @param jointAccelerations Smoothed joint accelerations (ddq), aligned with q.
+/// @return An NimbleIDResult with jointTorques populated plus per-foot
+///         force / CoP / contact-state fields. Returns nil on failure.
+- (nullable NimbleIDResult *)solveIDGRFWithJointAngles:(NSArray<NSNumber *> *)jointAngles
+                                       jointVelocities:(NSArray<NSNumber *> *)jointVelocities
+                                    jointAccelerations:(NSArray<NSNumber *> *)jointAccelerations;
+
+/// Sets the ground plane y-coordinate in the ARKit world frame. Call once
+/// after calibration (or let it auto-calibrate from the first valid frame).
+/// Ground is assumed flat; M4+ may support tilted floors.
+- (void)setGroundHeightY:(double)y;
+
+/// Current ground height used for contact detection.
+@property (nonatomic, readonly) double groundHeightY;
+
+/// Whether a ground height has been explicitly set or auto-calibrated.
+@property (nonatomic, readonly) BOOL groundHeightCalibrated;
 
 /// Whether a model is currently loaded.
 @property (nonatomic, readonly) BOOL isModelLoaded;

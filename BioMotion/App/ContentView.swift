@@ -76,31 +76,50 @@ struct ContentView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 4)
 
-                // Accuracy diagnostics: IK residual (m) and max joint torque per kg.
-                // Goal ranges after full accuracy overhaul:
+                // Accuracy diagnostics: two rows of small pills.
+                // Row 1 — IK residual, max joint torque per kg, model mass.
+                // Row 2 — left/right foot load (fraction of body weight),
+                //         GRF root residual. Target ranges after full overhaul:
                 //   residual ≈ 0.01–0.03 m (ARKit-limited floor)
-                //   |τ|/m    ≈ 1–3 Nm/kg for walking/squat (physiological).
-                // Values >> 10 Nm/kg usually mean missing GRF or bad ddq.
+                //   |τ|/m    ≈ 1–3 Nm/kg for walking/squat (physiological)
+                //   L+R load ≈ 1.0 ± 0.1 in stance (weight supported by feet)
+                //   root res ≈ < 0.5 Nm/kg (GRF consistent with kinematics)
                 if nimble.isModelLoaded && bodyTracking.isTracking {
-                    HStack(spacing: 6) {
-                        AccuracyBadge(
-                            label: "residual",
-                            value: String(format: "%.3f m", nimble.ikMarkerResidualMeters),
-                            good: nimble.ikMarkerResidualMeters < 0.05
-                        )
-                        AccuracyBadge(
-                            label: "max |τ|/m",
-                            value: String(format: "%.1f Nm/kg", nimble.maxTorquePerKg),
-                            good: nimble.maxTorquePerKg < 5.0
-                        )
-                        if nimble.totalMassKg > 0 {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
                             AccuracyBadge(
-                                label: "mass",
-                                value: String(format: "%.0f kg", nimble.totalMassKg),
-                                good: true
+                                label: "residual",
+                                value: String(format: "%.3f m", nimble.ikMarkerResidualMeters),
+                                good: nimble.ikMarkerResidualMeters < 0.05
                             )
+                            AccuracyBadge(
+                                label: "max |τ|/m",
+                                value: String(format: "%.1f Nm/kg", nimble.maxTorquePerKg),
+                                good: nimble.maxTorquePerKg < 5.0
+                            )
+                            if nimble.totalMassKg > 0 {
+                                AccuracyBadge(
+                                    label: "mass",
+                                    value: String(format: "%.0f kg", nimble.totalMassKg),
+                                    good: true
+                                )
+                            }
+                            Spacer()
                         }
-                        Spacer()
+                        HStack(spacing: 6) {
+                            let totalLoad = nimble.leftFootLoadFraction + nimble.rightFootLoadFraction
+                            AccuracyBadge(
+                                label: "L/R load",
+                                value: String(format: "%.2f|%.2f", nimble.leftFootLoadFraction, nimble.rightFootLoadFraction),
+                                good: abs(totalLoad - 1.0) < 0.3 || totalLoad < 0.1
+                            )
+                            AccuracyBadge(
+                                label: "root res",
+                                value: String(format: "%.2f Nm/kg", nimble.rootResidualPerKg),
+                                good: nimble.rootResidualPerKg < 0.5
+                            )
+                            Spacer()
+                        }
                     }
                     .padding(.horizontal, 12)
                     .padding(.top, 2)

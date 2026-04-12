@@ -22,6 +22,14 @@ final class NimbleEngine: ObservableObject {
     @Published var maxTorquePerKg: Double = 0
     /// Total mass of the loaded (possibly scaled) skeleton, in kg.
     @Published var totalMassKg: Double = 0
+    /// Left/right foot vertical GRF as fractions of body weight (0-1.x typically).
+    /// Sum should be ~1.0 in steady stance, 0 in flight, 1.0-3.0 during impact.
+    @Published var leftFootLoadFraction: Double = 0
+    @Published var rightFootLoadFraction: Double = 0
+    /// Root 6D residual after GRF solve. < ~0.5 Nm/kg means GRF is consistent.
+    @Published var rootResidualPerKg: Double = 0
+    /// Current ground-plane height (ARKit world y), for display only.
+    @Published var groundHeightY: Double = 0
 
     /// Processed IK output with named DOFs.
     struct IKOutput {
@@ -34,6 +42,18 @@ final class NimbleEngine: ObservableObject {
     struct IDOutput {
         let jointTorques: [String: Double]  // DOF name → torque in Nm
         let timestamp: TimeInterval
+
+        // Ground-reaction-force diagnostics. Forces in newtons (world frame),
+        // CoPs in meters (world frame). Zero when the foot is not in contact.
+        var leftFootForce: SIMD3<Double> = .zero
+        var rightFootForce: SIMD3<Double> = .zero
+        var leftFootCoP: SIMD3<Double> = .zero
+        var rightFootCoP: SIMD3<Double> = .zero
+        var leftFootInContact: Bool = false
+        var rightFootInContact: Bool = false
+        /// Norm of the 6D residual at the floating root joint. Should be
+        /// small (< ~10 Nm) when GRF and kinematics are consistent.
+        var rootResidualNorm: Double = 0
     }
 
     /// Processed muscle optimization output.
@@ -181,7 +201,8 @@ final class NimbleEngine: ObservableObject {
                 // Still warming up: publish live IK only, no ID/muscle yet.
                 self.publishResults(ik: liveIkOutput, id: nil, muscle: nil,
                                     ikTime: ikTime, idTime: 0, muscleTime: 0,
-                                    ikResidual: ikResult.error, maxTorqueNm: 0)
+                                    ikResidual: ikResult.error, maxTorqueNm: 0,
+                                    groundY: self.bridge.groundHeightY)
                 return
             }
 
@@ -208,7 +229,10 @@ final class NimbleEngine: ObservableObject {
             var maxTorqueNm = 0.0
 
             let idStart = CACurrentMediaTime()
-            if let idResult = self.bridge.solveID(
+            // Use the GRF-aware ID solver. It runs Nimble's near-CoP
+            // multi-contact inverse dynamics which auto-detects foot contact
+            // and decomposes the system wrench into GRFs + joint torques.
+            if let idResult = self.bridge.solveIDGRF(
                 withJointAngles: smoothedQNS,
                 jointVelocities: smoothedDQNS,
                 jointAccelerations: smoothedDDQNS
@@ -221,7 +245,20 @@ final class NimbleEngine: ObservableObject {
                     torques[dofNames[i]] = t
                     if abs(t) > maxTorqueNm { maxTorqueNm = abs(t) }
                 }
-                idOutput = IDOutput(jointTorques: torques, timestamp: centerTimestamp)
+
+                var out = IDOutput(jointTorques: torques, timestamp: centerTimestamp)
+                func toSimd(_ arr: [NSNumber]) -> SIMD3<Double> {
+                    guard arr.count >= 3 else { return .zero }
+                    return SIMD3<Double>(arr[0].doubleValue, arr[1].doubleValue, arr[2].doubleValue)
+                }
+                out.leftFootForce  = toSimd(idResult.leftFootForce)
+                out.rightFootForce = toSimd(idResult.rightFootForce)
+                out.leftFootCoP    = toSimd(idResult.leftFootCoP)
+                out.rightFootCoP   = toSimd(idResult.rightFootCoP)
+                out.leftFootInContact  = idResult.leftFootInContact
+                out.rightFootInContact = idResult.rightFootInContact
+                out.rootResidualNorm   = idResult.rootResidualNorm
+                idOutput = out
             }
 
             // --- Muscle static optimization (on same SG-centered state) ---
@@ -266,15 +303,23 @@ final class NimbleEngine: ObservableObject {
 
             self.publishResults(ik: smoothedIkOutput, id: idOutput, muscle: muscleOutput,
                                 ikTime: ikTime, idTime: idTime, muscleTime: muscleTime,
-                                ikResidual: ikResult.error, maxTorqueNm: maxTorqueNm)
+                                ikResidual: ikResult.error, maxTorqueNm: maxTorqueNm,
+                                groundY: self.bridge.groundHeightY)
         }
     }
 
     private func publishResults(ik: IKOutput, id: IDOutput?, muscle: MuscleOutput?,
                                 ikTime: Double, idTime: Double, muscleTime: Double,
-                                ikResidual: Double, maxTorqueNm: Double) {
+                                ikResidual: Double, maxTorqueNm: Double,
+                                groundY: Double) {
         let mass = max(totalMassKg, 1e-6)
         let torquePerKg = maxTorqueNm / mass
+        // Vertical load on each foot as a fraction of body weight. Useful for
+        // validating stance vs. swing phase and impact peaks during gait.
+        let weightN = mass * 9.81
+        let leftLoad  = (id?.leftFootForce.y  ?? 0) / weightN
+        let rightLoad = (id?.rightFootForce.y ?? 0) / weightN
+        let rootResPerKg = (id?.rootResidualNorm ?? 0) / mass
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.lastIKResult = ik
@@ -285,6 +330,10 @@ final class NimbleEngine: ObservableObject {
             self.muscleSolveTimeMs = muscleTime
             self.ikMarkerResidualMeters = ikResidual
             self.maxTorquePerKg = torquePerKg
+            self.leftFootLoadFraction = leftLoad
+            self.rightFootLoadFraction = rightLoad
+            self.rootResidualPerKg = rootResPerKg
+            self.groundHeightY = groundY
         }
     }
 

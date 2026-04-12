@@ -46,17 +46,58 @@ using namespace dart;
 
 @implementation NimbleIDResult {
     NSArray<NSNumber *> *_jointTorques;
+    NSArray<NSNumber *> *_leftFootForce;
+    NSArray<NSNumber *> *_rightFootForce;
+    NSArray<NSNumber *> *_leftFootCoP;
+    NSArray<NSNumber *> *_rightFootCoP;
+    BOOL _leftFootInContact;
+    BOOL _rightFootInContact;
+    double _rootResidualNorm;
 }
 
 - (instancetype)initWithTorques:(NSArray<NSNumber *> *)torques {
     self = [super init];
     if (self) {
         _jointTorques = [torques copy];
+        NSArray<NSNumber *> *zero3 = @[@0.0, @0.0, @0.0];
+        _leftFootForce = zero3; _rightFootForce = zero3;
+        _leftFootCoP = zero3; _rightFootCoP = zero3;
+        _leftFootInContact = NO; _rightFootInContact = NO;
+        _rootResidualNorm = 0;
+    }
+    return self;
+}
+
+- (instancetype)initWithTorques:(NSArray<NSNumber *> *)torques
+                   leftForce:(NSArray<NSNumber *> *)leftForce
+                   rightForce:(NSArray<NSNumber *> *)rightForce
+                     leftCoP:(NSArray<NSNumber *> *)leftCoP
+                    rightCoP:(NSArray<NSNumber *> *)rightCoP
+               leftInContact:(BOOL)leftInContact
+              rightInContact:(BOOL)rightInContact
+            rootResidualNorm:(double)residual {
+    self = [super init];
+    if (self) {
+        _jointTorques = [torques copy];
+        _leftFootForce = [leftForce copy];
+        _rightFootForce = [rightForce copy];
+        _leftFootCoP = [leftCoP copy];
+        _rightFootCoP = [rightCoP copy];
+        _leftFootInContact = leftInContact;
+        _rightFootInContact = rightInContact;
+        _rootResidualNorm = residual;
     }
     return self;
 }
 
 - (NSArray<NSNumber *> *)jointTorques { return _jointTorques; }
+- (NSArray<NSNumber *> *)leftFootForce { return _leftFootForce; }
+- (NSArray<NSNumber *> *)rightFootForce { return _rightFootForce; }
+- (NSArray<NSNumber *> *)leftFootCoP { return _leftFootCoP; }
+- (NSArray<NSNumber *> *)rightFootCoP { return _rightFootCoP; }
+- (BOOL)leftFootInContact { return _leftFootInContact; }
+- (BOOL)rightFootInContact { return _rightFootInContact; }
+- (double)rootResidualNorm { return _rootResidualNorm; }
 
 @end
 
@@ -66,15 +107,32 @@ using namespace dart;
     std::shared_ptr<dynamics::Skeleton> _skeleton;
     std::map<std::string, std::pair<dynamics::BodyNode*, Eigen::Vector3s>> _markers;
     BOOL _modelLoaded;
+
+    // Ground-plane calibration for GRF estimation.
+    // Held in the ARKit world frame (y-up). Auto-calibrated from a running
+    // minimum of the subject's feet y-coordinates unless explicitly set.
+    double _groundHeightY;
+    BOOL _groundHeightCalibrated;
 }
 
 - (instancetype)init {
     self = [super init];
     if (self) {
         _modelLoaded = NO;
+        _groundHeightY = 0.0;
+        _groundHeightCalibrated = NO;
     }
     return self;
 }
+
+- (void)setGroundHeightY:(double)y {
+    _groundHeightY = y;
+    _groundHeightCalibrated = YES;
+    NSLog(@"NimbleBridge: Ground plane set to y=%.4f m", y);
+}
+
+- (double)groundHeightY { return _groundHeightY; }
+- (BOOL)groundHeightCalibrated { return _groundHeightCalibrated; }
 
 - (BOOL)loadModelFromPath:(NSString *)path {
     try {
@@ -451,6 +509,202 @@ using namespace dart;
         return nil;
     } catch (...) {
         NSLog(@"NimbleBridge: ID unknown exception");
+        return nil;
+    }
+}
+
+// MARK: - ID with ground reaction force estimation
+//
+// This is the production ID path — it uses Nimble's built-in multi-contact,
+// near-CoP inverse-dynamics solver to decompose the system wrench into
+// per-foot GRFs plus joint torques. Foot contact is detected from the y
+// coordinate of `calcn_l` / `calcn_r` versus a running ground-height
+// estimate. When neither foot is in contact (flight), we fall back to
+// plain getInverseDynamics which implicitly assumes zero external force.
+
+static inline NSArray<NSNumber *> *vec3ToNSArray(const Eigen::Vector3s& v) {
+    return @[@(v.x()), @(v.y()), @(v.z())];
+}
+
+- (nullable NimbleIDResult *)solveIDGRFWithJointAngles:(NSArray<NSNumber *> *)jointAngles
+                                       jointVelocities:(NSArray<NSNumber *> *)jointVelocities
+                                    jointAccelerations:(NSArray<NSNumber *> *)jointAccelerations {
+    if (!_modelLoaded) return nil;
+
+    NSInteger numDOFs = (NSInteger)_skeleton->getNumDofs();
+    if (jointAngles.count != numDOFs ||
+        jointVelocities.count != numDOFs ||
+        jointAccelerations.count != numDOFs) {
+        return nil;
+    }
+
+    try {
+        // Set skeleton state
+        Eigen::VectorXs q(numDOFs), dq(numDOFs), ddq(numDOFs);
+        for (NSInteger i = 0; i < numDOFs; i++) {
+            q(i)   = [jointAngles[i] doubleValue];
+            dq(i)  = [jointVelocities[i] doubleValue];
+            ddq(i) = [jointAccelerations[i] doubleValue];
+        }
+
+        _skeleton->setPositions(q);
+        _skeleton->setVelocities(dq);
+
+        // --- 1. Ground height auto-calibration ---
+        // Track the lowest observed calcn y across the session as a running
+        // minimum. This is a cheap, monotonic estimate that doesn't need
+        // explicit calibration. The offset (1 cm below the lowest observed
+        // heel) absorbs the fact that calcn body origin sits slightly above
+        // the true ground contact point.
+        dynamics::BodyNode* calcnL = _skeleton->getBodyNode("calcn_l");
+        dynamics::BodyNode* calcnR = _skeleton->getBodyNode("calcn_r");
+        if (!calcnL || !calcnR) {
+            // No foot bodies → can't do GRF; fall back to regular ID.
+            Eigen::VectorXs torques = _skeleton->getInverseDynamics(ddq);
+            NSMutableArray<NSNumber *> *ta = [NSMutableArray arrayWithCapacity:numDOFs];
+            for (NSInteger i = 0; i < numDOFs; i++) [ta addObject:@(torques(i))];
+            return [[NimbleIDResult alloc] initWithTorques:ta];
+        }
+
+        double calcnLY = calcnL->getWorldTransform().translation().y();
+        double calcnRY = calcnR->getWorldTransform().translation().y();
+        double lowest = std::min(calcnLY, calcnRY);
+
+        if (!_groundHeightCalibrated) {
+            _groundHeightY = lowest - 0.01;
+            _groundHeightCalibrated = YES;
+        } else if (lowest - 0.01 < _groundHeightY) {
+            // Ratchet down if a lower foot position is observed.
+            _groundHeightY = lowest - 0.01;
+        }
+
+        // --- 2. Contact detection ---
+        // A foot is in contact if its heel y sits within CONTACT_THRESHOLD
+        // of the ground and it's moving slowly (we gate on velocity too via
+        // getCOMLinearVelocity later if needed — for baseline we go by
+        // position alone and let the near-CoP solver absorb the rest).
+        const double CONTACT_THRESHOLD = 0.06;  // 6 cm
+        BOOL leftContact  = (calcnLY - _groundHeightY) < CONTACT_THRESHOLD;
+        BOOL rightContact = (calcnRY - _groundHeightY) < CONTACT_THRESHOLD;
+
+        // --- 3. Build initial wrench guesses (Newton-Euler baseline) ---
+        // Whole-body weight: GRF_total ≈ mass * g (static stance). We split
+        // 50/50 if both in contact, 100% on the single foot if only one,
+        // and zero if airborne (caller falls through to plain ID).
+        std::vector<const dynamics::BodyNode*> contactBodies;
+        std::vector<Eigen::Vector6s> wrenchGuesses;
+
+        double mass = _skeleton->getMass();
+        Eigen::Vector3s weightUp(0.0, mass * 9.81, 0.0);
+
+        int contactCount = (leftContact ? 1 : 0) + (rightContact ? 1 : 0);
+        if (contactCount == 0) {
+            // Flight phase — zero GRF, plain ID.
+            Eigen::VectorXs torques = _skeleton->getInverseDynamics(ddq);
+            NSMutableArray<NSNumber *> *ta = [NSMutableArray arrayWithCapacity:numDOFs];
+            for (NSInteger i = 0; i < numDOFs; i++) [ta addObject:@(torques(i))];
+            NSArray<NSNumber *> *zero3 = @[@0.0, @0.0, @0.0];
+            return [[NimbleIDResult alloc] initWithTorques:ta
+                                                 leftForce:zero3
+                                                rightForce:zero3
+                                                   leftCoP:zero3
+                                                  rightCoP:zero3
+                                             leftInContact:NO
+                                            rightInContact:NO
+                                          rootResidualNorm:0.0];
+        }
+
+        Eigen::Vector3s perFootForce = weightUp / contactCount;
+        auto makeWrenchGuess = [&](dynamics::BodyNode* foot) -> Eigen::Vector6s {
+            Eigen::Vector6s w;
+            w.head<3>() = Eigen::Vector3s::Zero();   // torque (angular)
+            w.tail<3>() = perFootForce;              // force  (linear, world)
+            return w;
+        };
+
+        if (leftContact)  {
+            contactBodies.push_back(calcnL);
+            wrenchGuesses.push_back(makeWrenchGuess(calcnL));
+        }
+        if (rightContact) {
+            contactBodies.push_back(calcnR);
+            wrenchGuesses.push_back(makeWrenchGuess(calcnR));
+        }
+
+        // --- 4. Solve ---
+        // getMultipleContactInverseDynamicsNearCoP finds per-foot wrenches
+        // that (a) satisfy the Newton-Euler acceleration constraint, (b) sit
+        // as close as possible to the wrench guesses, and (c) have their
+        // center-of-pressure inside each foot's support polygon / on the
+        // ground plane. Vertical axis = 1 (y).
+        auto result = _skeleton->getMultipleContactInverseDynamicsNearCoP(
+            ddq,
+            contactBodies,
+            wrenchGuesses,
+            (s_t)_groundHeightY,
+            1,          // vertical axis = y
+            0.001,      // default weightForceToMeters
+            false);     // not verbose
+
+        // --- 5. Package results ---
+        NSMutableArray<NSNumber *> *torqueArray = [NSMutableArray arrayWithCapacity:numDOFs];
+        for (NSInteger i = 0; i < result.jointTorques.size(); i++) {
+            [torqueArray addObject:@(result.jointTorques(i))];
+        }
+
+        // Pull left/right wrenches back out of result.contactWrenches in the
+        // same order we pushed them. Extract force and CoP where applicable.
+        Eigen::Vector3s zero3 = Eigen::Vector3s::Zero();
+        Eigen::Vector3s leftForce = zero3, rightForce = zero3;
+        Eigen::Vector3s leftCoP = zero3, rightCoP = zero3;
+        size_t idx = 0;
+        auto copFromWrench = [&](const Eigen::Vector6s& w, const Eigen::Vector3s& ctr)
+            -> Eigen::Vector3s {
+            // CoP on the ground plane: project from body origin along force
+            // direction to hit y = _groundHeightY. For a vertical-y
+            // convention, CoP_xz = body_xz + (body_y - ground_y) * f_xz/f_y
+            Eigen::Vector3s force = w.tail<3>();
+            if (std::abs(force.y()) < 1e-6) return ctr;
+            double lambda = (ctr.y() - _groundHeightY) / force.y();
+            Eigen::Vector3s cop = ctr - lambda * force;
+            cop.y() = _groundHeightY;
+            return cop;
+        };
+        if (leftContact) {
+            leftForce = result.contactWrenches[idx].tail<3>();
+            leftCoP = copFromWrench(result.contactWrenches[idx],
+                                    calcnL->getWorldTransform().translation());
+            idx++;
+        }
+        if (rightContact) {
+            rightForce = result.contactWrenches[idx].tail<3>();
+            rightCoP = copFromWrench(result.contactWrenches[idx],
+                                     calcnR->getWorldTransform().translation());
+            idx++;
+        }
+
+        // Root residual: the 6DoF component of jointTorques at the floating
+        // root joint. For a correctly-modelled GRF system this should be
+        // ~zero (the free joint has no actuator, so any residual there is
+        // unphysical "error"). We take the norm as a scalar diagnostic.
+        double rootResidual = 0.0;
+        if (result.jointTorques.size() >= 6) {
+            rootResidual = result.jointTorques.head<6>().norm();
+        }
+
+        return [[NimbleIDResult alloc] initWithTorques:torqueArray
+                                             leftForce:vec3ToNSArray(leftForce)
+                                            rightForce:vec3ToNSArray(rightForce)
+                                               leftCoP:vec3ToNSArray(leftCoP)
+                                              rightCoP:vec3ToNSArray(rightCoP)
+                                         leftInContact:leftContact
+                                        rightInContact:rightContact
+                                      rootResidualNorm:rootResidual];
+    } catch (const std::exception& e) {
+        NSLog(@"NimbleBridge: ID+GRF exception: %s", e.what());
+        return nil;
+    } catch (...) {
+        NSLog(@"NimbleBridge: ID+GRF unknown exception");
         return nil;
     }
 }
