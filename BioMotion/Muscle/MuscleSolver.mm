@@ -298,6 +298,24 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
     // Keyed by muscle name (insertion order from the caller) so the caller's
     // muscle ordering can change between frames without corrupting history.
     std::map<std::string, double> _prevMuscleLengths;
+
+    // Persistent OSQP workspace for the production solver. Kept alive
+    // across frames so `osqp_update_data_vec` / `osqp_update_data_mat` can
+    // replace the expensive `osqp_setup` + KKT factorization with a much
+    // cheaper in-place update. Reset whenever nMuscles changes.
+    OSQPSolver* _realSolver;
+    NSInteger _realSolverNMuscles;
+    // Retained storage backing the OSQP matrix pointers — OSQP does not
+    // copy the input arrays, so these buffers must outlive the solver.
+    std::vector<OSQPInt> _realP_col_ptr;
+    std::vector<OSQPInt> _realP_row_idx;
+    std::vector<OSQPFloat> _realP_val;
+    std::vector<OSQPInt> _realA_col_ptr;
+    std::vector<OSQPInt> _realA_row_idx;
+    std::vector<OSQPFloat> _realA_val;
+    std::vector<OSQPFloat> _realQ;
+    std::vector<OSQPFloat> _realL;
+    std::vector<OSQPFloat> _realU;
 }
 
 - (instancetype)init {
@@ -305,6 +323,8 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
     if (self) {
         _solver = nullptr;
         _solverInitialized = NO;
+        _realSolver = nullptr;
+        _realSolverNMuscles = 0;
     }
     return self;
 }
@@ -312,6 +332,9 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
 - (void)dealloc {
     if (_solver) {
         osqp_cleanup(_solver);
+    }
+    if (_realSolver) {
+        osqp_cleanup(_realSolver);
     }
 }
 
@@ -698,82 +721,133 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
     const double aMin = 0.01;
     const double aMax = 1.0;
 
-    // Build P in CSC upper-triangular form.
-    std::vector<OSQPInt> P_col_ptr(nMuscles + 1, 0);
-    std::vector<OSQPInt> P_row_idx;
-    std::vector<OSQPFloat> P_val;
-    P_row_idx.reserve(nMuscles * (nMuscles + 1) / 2);
-    P_val.reserve(nMuscles * (nMuscles + 1) / 2);
-    for (NSInteger col = 0; col < nMuscles; col++) {
-        P_col_ptr[col] = (OSQPInt)P_row_idx.size();
-        for (NSInteger row = 0; row <= col; row++) {
-            double v = P(row, col);
-            if (std::abs(v) > 1e-12 || row == col) {
-                P_row_idx.push_back((OSQPInt)row);
-                P_val.push_back((OSQPFloat)v);
+    // --- 3. OSQP setup or in-place update (workspace reuse) ---
+    //
+    // If nMuscles hasn't changed since the last call and we still have a
+    // live solver, we update the existing workspace in-place via the
+    // `osqp_update_data_*` APIs. This skips the expensive KKT
+    // factorization that `osqp_setup` performs, which is by far the
+    // dominant cost in a per-frame solve. If the dimensions changed (e.g.
+    // a new osim model was loaded) or no solver exists yet, we do a full
+    // setup and allocate fresh backing buffers.
+    //
+    // NOTE: OSQP does not copy input arrays into its own storage — it
+    // holds pointers into the user-provided buffers. The `_realP_*` etc.
+    // ivars keep those buffers alive for the lifetime of the solver so
+    // repeated solves don't read freed memory.
+
+    const bool dimsChanged = (_realSolver == nullptr) ||
+                             (_realSolverNMuscles != nMuscles);
+
+    if (dimsChanged) {
+        // Tear down any stale solver and rebuild the CSC buffers from scratch.
+        if (_realSolver) { osqp_cleanup(_realSolver); _realSolver = nullptr; }
+
+        _realP_col_ptr.assign(nMuscles + 1, 0);
+        _realP_row_idx.clear();
+        _realP_val.clear();
+        _realP_row_idx.reserve(nMuscles * (nMuscles + 1) / 2);
+        _realP_val.reserve(nMuscles * (nMuscles + 1) / 2);
+        for (NSInteger col = 0; col < nMuscles; col++) {
+            _realP_col_ptr[col] = (OSQPInt)_realP_row_idx.size();
+            for (NSInteger row = 0; row <= col; row++) {
+                double v = P(row, col);
+                _realP_row_idx.push_back((OSQPInt)row);
+                _realP_val.push_back((OSQPFloat)v);
             }
         }
-    }
-    P_col_ptr[nMuscles] = (OSQPInt)P_row_idx.size();
+        _realP_col_ptr[nMuscles] = (OSQPInt)_realP_row_idx.size();
 
-    // Identity A matrix in CSC.
-    std::vector<OSQPInt> A_col_ptr(nMuscles + 1);
-    std::vector<OSQPInt> A_row_idx(nMuscles);
-    std::vector<OSQPFloat> A_val(nMuscles, 1.0);
-    for (NSInteger i = 0; i < nMuscles; i++) {
-        A_col_ptr[i] = (OSQPInt)i;
-        A_row_idx[i] = (OSQPInt)i;
-    }
-    A_col_ptr[nMuscles] = (OSQPInt)nMuscles;
+        _realA_col_ptr.assign(nMuscles + 1, 0);
+        _realA_row_idx.assign(nMuscles, 0);
+        _realA_val.assign(nMuscles, 1.0);
+        for (NSInteger i = 0; i < nMuscles; i++) {
+            _realA_col_ptr[i] = (OSQPInt)i;
+            _realA_row_idx[i] = (OSQPInt)i;
+        }
+        _realA_col_ptr[nMuscles] = (OSQPInt)nMuscles;
 
-    std::vector<OSQPFloat> qVec(nMuscles);
-    for (NSInteger i = 0; i < nMuscles; i++) qVec[i] = (OSQPFloat)g(i);
+        _realQ.assign(nMuscles, 0);
+        _realL.assign(nMuscles, (OSQPFloat)aMin);
+        _realU.assign(nMuscles, (OSQPFloat)aMax);
+        for (NSInteger i = 0; i < nMuscles; i++) _realQ[i] = (OSQPFloat)g(i);
 
-    std::vector<OSQPFloat> lVec(nMuscles, (OSQPFloat)aMin);
-    std::vector<OSQPFloat> uVec(nMuscles, (OSQPFloat)aMax);
+        OSQPCscMatrix P_csc, A_csc;
+        OSQPCscMatrix_set_data(&P_csc, (OSQPInt)nMuscles, (OSQPInt)nMuscles,
+                               (OSQPInt)_realP_val.size(),
+                               _realP_val.data(),
+                               _realP_row_idx.data(),
+                               _realP_col_ptr.data());
+        OSQPCscMatrix_set_data(&A_csc, (OSQPInt)nMuscles, (OSQPInt)nMuscles,
+                               (OSQPInt)_realA_val.size(),
+                               _realA_val.data(),
+                               _realA_row_idx.data(),
+                               _realA_col_ptr.data());
 
-    OSQPCscMatrix P_csc, A_csc;
-    OSQPCscMatrix_set_data(&P_csc, (OSQPInt)nMuscles, (OSQPInt)nMuscles,
-                           (OSQPInt)P_val.size(), P_val.data(),
-                           P_row_idx.data(), P_col_ptr.data());
-    OSQPCscMatrix_set_data(&A_csc, (OSQPInt)nMuscles, (OSQPInt)nMuscles,
-                           (OSQPInt)A_val.size(), A_val.data(),
-                           A_row_idx.data(), A_col_ptr.data());
+        OSQPSettings settings;
+        osqp_set_default_settings(&settings);
+        settings.max_iter = 200;
+        settings.eps_abs = 1e-3;
+        settings.eps_rel = 1e-3;
+        settings.verbose = false;
+        settings.warm_starting = true;
+        settings.polishing = false;
 
-    if (_solver) {
-        osqp_cleanup(_solver);
-        _solver = nullptr;
-    }
-
-    OSQPSettings settings;
-    osqp_set_default_settings(&settings);
-    settings.max_iter = 200;
-    settings.eps_abs = 1e-3;
-    settings.eps_rel = 1e-3;
-    settings.verbose = false;
-    settings.warm_starting = true;
-    settings.polishing = false;
-
-    OSQPInt exitflag = osqp_setup(&_solver, &P_csc, qVec.data(), &A_csc,
-                                  lVec.data(), uVec.data(),
-                                  (OSQPInt)nMuscles, (OSQPInt)nMuscles,
-                                  &settings);
-    if (exitflag != 0 || !_solver) {
-        NSLog(@"MuscleSolver: OSQP setup failed with code %d", (int)exitflag);
-        return nil;
-    }
-
-    // Warm start from previous frame.
-    if (_prevActivations.size() == (size_t)nMuscles) {
-        osqp_warm_start(_solver, _prevActivations.data(), nullptr);
+        OSQPInt exitflag = osqp_setup(&_realSolver, &P_csc, _realQ.data(), &A_csc,
+                                      _realL.data(), _realU.data(),
+                                      (OSQPInt)nMuscles, (OSQPInt)nMuscles,
+                                      &settings);
+        if (exitflag != 0 || !_realSolver) {
+            NSLog(@"MuscleSolver: OSQP setup failed with code %d", (int)exitflag);
+            _realSolverNMuscles = 0;
+            return nil;
+        }
+        _realSolverNMuscles = nMuscles;
     } else {
+        // Same problem dimensions — update P values and q in place.
+        // P has fixed sparsity (upper-triangular dense), so we just write
+        // the new upper-triangular values column-by-column in the same
+        // order we originally built them.
+        size_t idx = 0;
+        for (NSInteger col = 0; col < nMuscles; col++) {
+            for (NSInteger row = 0; row <= col; row++) {
+                _realP_val[idx++] = (OSQPFloat)P(row, col);
+            }
+        }
+        for (NSInteger i = 0; i < nMuscles; i++) {
+            _realQ[i] = (OSQPFloat)g(i);
+        }
+
+        // Update P values (NULL idx array = all values). l/u are
+        // constant so we pass NULL for those to skip updates.
+        OSQPInt pUpdate = osqp_update_data_mat(_realSolver,
+                                               _realP_val.data(), OSQP_NULL,
+                                               (OSQPInt)_realP_val.size(),
+                                               OSQP_NULL, OSQP_NULL, 0);
+        OSQPInt qUpdate = osqp_update_data_vec(_realSolver,
+                                               _realQ.data(),
+                                               OSQP_NULL, OSQP_NULL);
+        if (pUpdate != 0 || qUpdate != 0) {
+            // Fall back to full setup on update failure (should be rare).
+            NSLog(@"MuscleSolver: OSQP in-place update failed (P=%d q=%d) — resetting",
+                  (int)pUpdate, (int)qUpdate);
+            osqp_cleanup(_realSolver);
+            _realSolver = nullptr;
+            _realSolverNMuscles = 0;
+            return nil;
+        }
+    }
+
+    // Warm start from previous frame's activations.
+    if (_prevActivations.size() != (size_t)nMuscles) {
         _prevActivations.assign(nMuscles, 0.05);
     }
+    osqp_warm_start(_realSolver, _prevActivations.data(), OSQP_NULL);
 
-    osqp_solve(_solver);
+    osqp_solve(_realSolver);
 
-    BOOL converged = (_solver->info->status_val == OSQP_SOLVED ||
-                      _solver->info->status_val == OSQP_SOLVED_INACCURATE);
+    BOOL converged = (_realSolver->info->status_val == OSQP_SOLVED ||
+                      _realSolver->info->status_val == OSQP_SOLVED_INACCURATE);
 
     NSMutableArray<NSString *> *outNames =
         [NSMutableArray arrayWithCapacity:nMuscles];
@@ -784,7 +858,7 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
 
     for (NSInteger m = 0; m < nMuscles; m++) {
         double a = converged
-            ? std::clamp((double)_solver->solution->x[m], aMin, aMax)
+            ? std::clamp((double)_realSolver->solution->x[m], aMin, aMax)
             : aMin;
         double f = a * forceScale[m];
         [outNames addObject:muscleNames[m]];
@@ -795,9 +869,7 @@ static void assignMomentArmsFromName(muscle::MuscleParams& m) {
 
     double solveTime = (CACurrentMediaTime() - startTime) * 1000.0;
 
-    osqp_cleanup(_solver);
-    _solver = nullptr;
-
+    // Keep _realSolver alive for the next frame.
     return [[MuscleActivationResult alloc] initWithNames:outNames
                                              activations:outActivations
                                                   forces:outForces
