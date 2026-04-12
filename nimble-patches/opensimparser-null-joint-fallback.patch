@@ -1,0 +1,133 @@
+diff --git a/dart/biomechanics/OpenSimParser.cpp b/dart/biomechanics/OpenSimParser.cpp
+index e2ca271..4ef4a53 100644
+--- a/dart/biomechanics/OpenSimParser.cpp
++++ b/dart/biomechanics/OpenSimParser.cpp
+@@ -17,7 +17,9 @@
+ 
+ #include "dart/biomechanics/ForcePlate.hpp"
+ #include "dart/biomechanics/IKErrorReport.hpp"
++#ifndef DART_IOS_BUILD
+ #include "dart/biomechanics/MarkerFitter.hpp"
++#endif
+ #include "dart/biomechanics/macros.hpp"
+ #include "dart/common/Uri.hpp"
+ #include "dart/dynamics/BallJoint.hpp"
+@@ -52,13 +54,19 @@
+ #include "dart/math/PiecewiseLinearFunction.hpp"
+ #include "dart/math/PolynomialFunction.hpp"
+ #include "dart/math/SimmSpline.hpp"
++#ifndef DART_IOS_BUILD
+ #include "dart/server/GUIRecording.hpp"
++#endif
+ #include "dart/utils/CompositeResourceRetriever.hpp"
+ #include "dart/utils/DartResourceRetriever.hpp"
++#ifndef DART_IOS_BUILD
+ #include "dart/utils/MJCFExporter.hpp"
++#endif
+ #include "dart/utils/StringUtils.hpp"
+ #include "dart/utils/XmlHelpers.hpp"
++#ifndef DART_IOS_BUILD
+ #include "dart/utils/sdf/SdfParser.hpp"
++#endif
+ 
+ using namespace std;
+ 
+@@ -1812,6 +1820,7 @@ void OpenSimParser::moveOsimMarkers(
+   newFile.SaveFile(outputPath.c_str());
+ }
+ 
++#ifndef DART_IOS_BUILD
+ //==============================================================================
+ /// Read an original *.osim file (which contains a marker set), and a target
+ /// *.osim file, and translate the markers from the original to the target,
+@@ -2519,6 +2528,7 @@ OpenSimParser::translateOsimMarkers(
+ 
+   return std::make_pair(guessedMarkers, missingMarkers);
+ }
++#endif // DART_IOS_BUILD
+ 
+ //==============================================================================
+ /// This method will use several heuristics, including the names of joints,
+@@ -4797,6 +4807,7 @@ OpenSimScaleAndMarkerOffsets OpenSimParser::getScaleAndMarkerOffsets(
+   return config;
+ }
+ 
++#ifndef DART_IOS_BUILD
+ //==============================================================================
+ /// This does its best to convert a *.osim file to a URDF file.
+ bool OpenSimParser::convertOsimToSDF(
+@@ -4820,7 +4831,9 @@ bool OpenSimParser::convertOsimToSDF(
+     return false;
+   }
+ }
++#endif // DART_IOS_BUILD
+ 
++#ifndef DART_IOS_BUILD
+ /// This does its best to convert a *.osim file to an MJCF file. It will
+ /// simplify the skeleton by merging any bodies that are requested, and
+ /// deleting any joints linking those bodies.
+@@ -4845,6 +4858,7 @@ bool OpenSimParser::convertOsimToMJCF(
+     return false;
+   }
+ }
++#endif // DART_IOS_BUILD
+ 
+ Eigen::Vector3s readAttachedGeometry(
+     tinyxml2::XMLElement* attachedGeometry,
+@@ -5761,7 +5775,55 @@ std::tuple<dynamics::Joint*, dynamics::BodyNode*, Eigen::Vector3s> createJoint(
+         "now, though, we're exiting with failure.");
+   }
+ 
+-  assert(childBody != nullptr);
++  // BioMotion patch (iOS release-safety):
++  //
++  // In release builds `assert()` is a no-op, so any path above that uses
++  // `assert(false && "Unsupported number of DOFs in CustomJoint")` or
++  // `assert(false && "Unrecognized function type")` silently falls through
++  // with `joint == nullptr`. The original code then hits
++  // `joint->setName(...)` and segfaults at `this + 0x3f`.
++  //
++  // This block logs the offending joint name + type (so we can pinpoint
++  // which XML entry nimble choked on) and substitutes a WeldJoint in place
++  // so the rest of parseOsim can finish building the skeleton. The affected
++  // joint becomes immobile but the hierarchy stays valid, and any downstream
++  // muscle that references it via body names still resolves.
++  if (joint == nullptr)
++  {
++    std::cerr << "OpenSimParser: failed to construct joint \"" << jointName
++              << "\" of type \"" << jointType
++              << "\" (unsupported CustomJoint DOF or function configuration). "
++              << "Falling back to a WeldJoint so the skeleton parse can continue."
++              << std::endl;
++    dynamics::WeldJoint::Properties props;
++    props.mName = jointName;
++    if (parentBody == nullptr)
++    {
++      auto pair = skel->createJointAndBodyNodePair<dynamics::WeldJoint>(
++          nullptr, props, bodyProps);
++      joint = pair.first;
++      childBody = pair.second;
++    }
++    else
++    {
++      auto pair
++          = parentBody->createChildJointAndBodyNodePair<dynamics::WeldJoint>(
++              props, bodyProps);
++      joint = pair.first;
++      childBody = pair.second;
++    }
++  }
++
++  if (childBody == nullptr)
++  {
++    std::cerr << "OpenSimParser: joint \"" << jointName
++              << "\" created but childBody is null — this indicates a "
++                 "nimble-internal bug, returning partial result."
++              << std::endl;
++    return std::make_tuple(joint, (dynamics::BodyNode*)nullptr,
++                           Eigen::Vector3s::Zero());
++  }
++
+   joint->setName(jointName);
+   // std::cout << jointName << std::endl;
+ 
