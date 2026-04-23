@@ -147,6 +147,33 @@ xcodebuild -exportArchive -archivePath build/BioMotion.xcarchive \
   -allowProvisioningUpdates
 ```
 
+## Offline mode preprocessing
+
+The Offline tab in the app expects a `.osim` model + `.mot` motion + `.mov` video,
+and (optionally) a precomputed 2D pose keypoint pair. The keypoint pair is what
+drives the 2D skeleton overlay drawn on top of the video; the analysis pipeline
+itself only needs `.osim` + `.mot`.
+
+To generate the keypoint pair from a video on your Mac:
+
+```bash
+python3 -m pip install --user mediapipe opencv-python numpy
+python3 scripts/build_offline_keypoints.py \
+    demodata/opencap-demodata/trail2/run2.mov
+# writes:
+#   demodata/opencap-demodata/trail2/run2.keypoints.json
+#   demodata/opencap-demodata/trail2/run2.keypoints.bin
+```
+
+Output is the `biomotion-offline-keypoints-v1` format defined in
+`OFFLINE_MODE_PLAN.md`: a small JSON header plus a frame-major
+`Float32 [x, y, confidence]` binary in OpenPose-25 ordering. Drop both files
+into the Offline tab via the **Import keypoints (.json + .bin)** button (it
+accepts a multi-file selection so you can pick the pair in one go).
+
+The `--detector` flag is a seam for swapping in a true OpenCap / OpenPose
+backend later; the iOS side only cares about the OpenPose-25 layout.
+
 ## Architecture & gotchas
 
 See [`CLAUDE.md`](./CLAUDE.md) for the runtime pipeline, Swift ↔ C++ bridge layout, key files, and build gotchas (Eigen versions, marker name mapping, C++ vs ObjC exceptions, etc.).

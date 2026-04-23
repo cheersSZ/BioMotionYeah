@@ -4,10 +4,12 @@ import XCTest
 final class MomentArmTests: XCTestCase {
 
     private var computer: MomentArmComputer!
+    private var bridge: NimbleBridge!
 
     override func setUp() {
         super.setUp()
         computer = MomentArmComputer()
+        bridge = NimbleBridge()
     }
 
     func testParseMusclePaths() {
@@ -121,7 +123,8 @@ final class MomentArmTests: XCTestCase {
             XCTFail("Cannot find Rajagopal2016.osim")
             return
         }
-        let success = computer.parseMusclePaths(fromOsimPath: path)
+        XCTAssertTrue(bridge.loadModel(fromPath: path))
+        let success = computer.parseMusclePaths(fromOsimPath: path, from: bridge)
         XCTAssertTrue(success)
     }
 }

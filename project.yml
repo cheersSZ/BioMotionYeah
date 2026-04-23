@@ -48,6 +48,8 @@ targets:
       path: BioMotion/Info.plist
       properties:
         NSCameraUsageDescription: "BioMotion needs camera access for real-time body tracking and motion analysis."
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen: {}
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait

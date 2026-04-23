@@ -8,32 +8,48 @@
 
 /* Begin PBXBuildFile section */
 		030DB864178EF4BB7B0439BA /* CalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 622F2E1A346D02B435A0299C /* CalibrationView.swift */; };
+		124B2839D8ECABB2CDD3509E /* OfflineAnalysisView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3070C20C399DAD10A5E51B /* OfflineAnalysisView.swift */; };
+		19CC363E2D6930502737D204 /* ImportedMotion.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD28B46E5F6778CC171DEACB /* ImportedMotion.swift */; };
 		19E2D7453EE33B78EB0260AA /* MuscleSolver.mm in Sources */ = {isa = PBXBuildFile; fileRef = D8B9BD44107DF71632646C0E /* MuscleSolver.mm */; };
 		2054C2A9E28C0BC0833FCFC9 /* NimbleBridge.mm in Sources */ = {isa = PBXBuildFile; fileRef = CF5D35BA98B286FEF7D0F3A2 /* NimbleBridge.mm */; };
 		20F59FB07F06FD0CAC0E3C90 /* MuscleSolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91F66CB7BEA67689B99D4833 /* MuscleSolverTests.swift */; };
 		230B1F67B40CFD95799F8811 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 137569E8BB6168170913C1FE /* ContentView.swift */; };
 		235F9CF6080D2CE0E058DA15 /* MotionRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C37A4A07CA2D87A4DFFF4348 /* MotionRecorder.swift */; };
+		2BDB8CA46928B1C0AF448849 /* OfflineTrail2IntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0D6733F2E535E33B7AF28DC /* OfflineTrail2IntegrationTests.swift */; };
+		32656D7DCD035C330EF10CBB /* ImportedMotionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B54F205ADC895D156D4DF33 /* ImportedMotionTests.swift */; };
 		32F526B0CAC7BDF4677DC5BF /* BodyJointTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39C64A42A229077EC3CF47FD /* BodyJointTests.swift */; };
+		33067759C670C84AD38F8C34 /* OfflineAnalysisTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = 906587B88248F8CEF9B1C7FE /* OfflineAnalysisTrack.swift */; };
 		39A5BD9ECC7553A6C9F6E556 /* OneEuroFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A5E8807D42FF44784FCF22F /* OneEuroFilter.swift */; };
 		59DA26453868CF7B43C39B26 /* NimbleBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF341D3E417E0E3014A867EA /* NimbleBridgeTests.swift */; };
 		5EB4E09CAD2BF5644147136D /* MomentArmTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBA3DB595817CE4AC35EB1E9 /* MomentArmTests.swift */; };
+		67A1BC38E2F799745ECA4BEF /* OfflineSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 601D904E383E586AD250E5DC /* OfflineSession.swift */; };
 		7ED1CE05D8C199C942D22051 /* SkeletonOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A80745E520E5C70DE78840DA /* SkeletonOverlayView.swift */; };
+		86070659C972AE23B5C471FB /* OfflineAnalysisExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58125BE8B717D8007650ED2E /* OfflineAnalysisExporterTests.swift */; };
 		8804D81FA38EF570856C727E /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A021DA9E5DE28ED2E1F45BB4 /* Assets.xcassets */; };
+		8BA4D21366AA64ACBB90BAC5 /* PoseOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1BD3FAFDFC15509A51B5B5A /* PoseOverlayView.swift */; };
 		98613DC9BB618D40355A1196 /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = DD8D8EE2FB43D7D0467DA761 /* Resources */; };
 		ABE29919DAB357CEDBF7D9E5 /* MuscleOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCE04065D9DEF183FAB2526A /* MuscleOverlay.swift */; };
 		AEBD0D6F6A05031B4795C512 /* BodyTrackingSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 675A6A481192DE8527711A02 /* BodyTrackingSession.swift */; };
+		B0483C2F850F07467AE69D05 /* run2.mot in Resources */ = {isa = PBXBuildFile; fileRef = 80C11EABCE574FC13E154E43 /* run2.mot */; };
 		B1670D1FDAE907294D961E3F /* FullBody.osim in Resources */ = {isa = PBXBuildFile; fileRef = 4B9713307F6A75E4289F37D8 /* FullBody.osim */; };
+		B3D307ED3FB1E1AB4EA98307 /* OfflineKeypointTrack.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6BB2911686F53907D4332F2 /* OfflineKeypointTrack.swift */; };
+		BB054C83DF961DD711A986A1 /* PlayerLayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC898B1594387F08147AE5E2 /* PlayerLayerView.swift */; };
 		BFE358FA68B0E8249A400DBF /* MotionRecorderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 85CB2DC650F7D9EA6AA72EF6 /* MotionRecorderTests.swift */; };
+		C20A61053F9B6751389362F7 /* RootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10D1CE64585775AA2C7FA9B6 /* RootView.swift */; };
+		C34A6F48B59A8F56EB3DCE5F /* OfflineAnalysisExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C3191E2C2A3B6E7A05FA3E68 /* OfflineAnalysisExporter.swift */; };
 		CC6C983411E3BECBF5DD0CF8 /* BodyJoint.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F2FCB0E08D59A9A2F873C83 /* BodyJoint.swift */; };
 		D093D465CAC7E39DD39FDCE5 /* TRCExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D7EE8254FA65A2ED3CA941A /* TRCExporter.swift */; };
 		D6ACBD79AA382B7E59CAF0A3 /* MomentArmComputer.mm in Sources */ = {isa = PBXBuildFile; fileRef = 7CC0C79CED5BDA3ECDCC98F2 /* MomentArmComputer.mm */; };
 		E1C04472A89C653399F92677 /* BioMotionApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61281090913631B0CE9A7C73 /* BioMotionApp.swift */; };
+		E959D703BF132AD54B3F3914 /* LaiUhlrich2022_scaled.osim in Resources */ = {isa = PBXBuildFile; fileRef = 697AD51A44D3A02F2B7A9749 /* LaiUhlrich2022_scaled.osim */; };
+		E9A0E2D85C9D03593470C0A1 /* run2.trc in Resources */ = {isa = PBXBuildFile; fileRef = EB396E5B38A77DAB8EC9DA88 /* run2.trc */; };
 		EA0D96BEE590A8EC44964245 /* SessionChartsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BB61194FADC588D790C9D483 /* SessionChartsView.swift */; };
 		EDA3373BCD3746A22F7CD272 /* NimbleEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BCF8A0B85EADE0EACE2E91D /* NimbleEngine.swift */; };
 		EFDB7E94C87B175ECC83B78E /* SavitzkyGolayFilter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 069BD05C894EA1A3D4B71811 /* SavitzkyGolayFilter.swift */; };
 		F5D3FF290D1F2FC2D53CD448 /* osqp_interrupt_stub.c in Sources */ = {isa = PBXBuildFile; fileRef = 61F7A23E87AFC3190713C1D6 /* osqp_interrupt_stub.c */; };
 		F879356CA878DC33DEF470D4 /* TRCExporterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AEC9BFD12C6D6FC08E98C76 /* TRCExporterTests.swift */; };
 		FD38E7F1B9C09FAC1FE3C10A /* Rajagopal2016.osim in Resources */ = {isa = PBXBuildFile; fileRef = 44D59B2D4FBCD3D020D9136A /* Rajagopal2016.osim */; };
+		FF898665544B834AB5796AE3 /* OfflineKeypointTrackTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 982D5FF3155ED0C535ECAAB7 /* OfflineKeypointTrackTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -48,40 +64,56 @@
 
 /* Begin PBXFileReference section */
 		069BD05C894EA1A3D4B71811 /* SavitzkyGolayFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SavitzkyGolayFilter.swift; sourceTree = "<group>"; };
+		10D1CE64585775AA2C7FA9B6 /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		137569E8BB6168170913C1FE /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		39C64A42A229077EC3CF47FD /* BodyJointTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyJointTests.swift; sourceTree = "<group>"; };
 		3F2FCB0E08D59A9A2F873C83 /* BodyJoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyJoint.swift; sourceTree = "<group>"; };
 		44D59B2D4FBCD3D020D9136A /* Rajagopal2016.osim */ = {isa = PBXFileReference; path = Rajagopal2016.osim; sourceTree = "<group>"; };
 		4A5E8807D42FF44784FCF22F /* OneEuroFilter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OneEuroFilter.swift; sourceTree = "<group>"; };
 		4AEC9BFD12C6D6FC08E98C76 /* TRCExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRCExporterTests.swift; sourceTree = "<group>"; };
+		4B54F205ADC895D156D4DF33 /* ImportedMotionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedMotionTests.swift; sourceTree = "<group>"; };
 		4B9713307F6A75E4289F37D8 /* FullBody.osim */ = {isa = PBXFileReference; path = FullBody.osim; sourceTree = "<group>"; };
+		58125BE8B717D8007650ED2E /* OfflineAnalysisExporterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineAnalysisExporterTests.swift; sourceTree = "<group>"; };
 		5D7EE8254FA65A2ED3CA941A /* TRCExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TRCExporter.swift; sourceTree = "<group>"; };
+		601D904E383E586AD250E5DC /* OfflineSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineSession.swift; sourceTree = "<group>"; };
 		607642EB6C7BD1743AB7D031 /* BioMotion-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "BioMotion-Bridging-Header.h"; sourceTree = "<group>"; };
 		61281090913631B0CE9A7C73 /* BioMotionApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BioMotionApp.swift; sourceTree = "<group>"; };
 		61F7A23E87AFC3190713C1D6 /* osqp_interrupt_stub.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = osqp_interrupt_stub.c; sourceTree = "<group>"; };
 		622F2E1A346D02B435A0299C /* CalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalibrationView.swift; sourceTree = "<group>"; };
 		640BA97ED28345730C5FFFB8 /* BioMotionTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = BioMotionTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		675A6A481192DE8527711A02 /* BodyTrackingSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BodyTrackingSession.swift; sourceTree = "<group>"; };
+		697AD51A44D3A02F2B7A9749 /* LaiUhlrich2022_scaled.osim */ = {isa = PBXFileReference; path = LaiUhlrich2022_scaled.osim; sourceTree = "<group>"; };
 		6BCF8A0B85EADE0EACE2E91D /* NimbleEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NimbleEngine.swift; sourceTree = "<group>"; };
 		7CC0C79CED5BDA3ECDCC98F2 /* MomentArmComputer.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MomentArmComputer.mm; sourceTree = "<group>"; };
+		80C11EABCE574FC13E154E43 /* run2.mot */ = {isa = PBXFileReference; path = run2.mot; sourceTree = "<group>"; };
 		85CB2DC650F7D9EA6AA72EF6 /* MotionRecorderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionRecorderTests.swift; sourceTree = "<group>"; };
+		906587B88248F8CEF9B1C7FE /* OfflineAnalysisTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineAnalysisTrack.swift; sourceTree = "<group>"; };
 		91F66CB7BEA67689B99D4833 /* MuscleSolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuscleSolverTests.swift; sourceTree = "<group>"; };
+		982D5FF3155ED0C535ECAAB7 /* OfflineKeypointTrackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineKeypointTrackTests.swift; sourceTree = "<group>"; };
 		9892753635961827833D0E4C /* MuscleSolver.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MuscleSolver.h; sourceTree = "<group>"; };
 		A021DA9E5DE28ED2E1F45BB4 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A6BB2911686F53907D4332F2 /* OfflineKeypointTrack.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineKeypointTrack.swift; sourceTree = "<group>"; };
 		A80745E520E5C70DE78840DA /* SkeletonOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SkeletonOverlayView.swift; sourceTree = "<group>"; };
 		ACD092133DD2189F1200C6F3 /* BioMotion.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = BioMotion.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		AF341D3E417E0E3014A867EA /* NimbleBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NimbleBridgeTests.swift; sourceTree = "<group>"; };
+		B1BD3FAFDFC15509A51B5B5A /* PoseOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PoseOverlayView.swift; sourceTree = "<group>"; };
 		BB61194FADC588D790C9D483 /* SessionChartsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionChartsView.swift; sourceTree = "<group>"; };
 		BBA3DB595817CE4AC35EB1E9 /* MomentArmTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MomentArmTests.swift; sourceTree = "<group>"; };
+		BD28B46E5F6778CC171DEACB /* ImportedMotion.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportedMotion.swift; sourceTree = "<group>"; };
+		C3191E2C2A3B6E7A05FA3E68 /* OfflineAnalysisExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineAnalysisExporter.swift; sourceTree = "<group>"; };
 		C37A4A07CA2D87A4DFFF4348 /* MotionRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MotionRecorder.swift; sourceTree = "<group>"; };
 		CCE04065D9DEF183FAB2526A /* MuscleOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MuscleOverlay.swift; sourceTree = "<group>"; };
 		CF5D35BA98B286FEF7D0F3A2 /* NimbleBridge.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = NimbleBridge.mm; sourceTree = "<group>"; };
 		D2EA3676A9420BE2BD36ACB2 /* MomentArmComputer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = MomentArmComputer.h; sourceTree = "<group>"; };
 		D8B9BD44107DF71632646C0E /* MuscleSolver.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = MuscleSolver.mm; sourceTree = "<group>"; };
 		DB99C395726EDA0E87378FE8 /* NimbleBridge.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = NimbleBridge.h; sourceTree = "<group>"; };
+		DC898B1594387F08147AE5E2 /* PlayerLayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerLayerView.swift; sourceTree = "<group>"; };
 		DD8D8EE2FB43D7D0467DA761 /* Resources */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Resources; path = BioMotion/Resources; sourceTree = SOURCE_ROOT; };
 		DE061204EBCA562182A0C976 /* NimbleBridge+Internal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "NimbleBridge+Internal.h"; sourceTree = "<group>"; };
+		E0D6733F2E535E33B7AF28DC /* OfflineTrail2IntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineTrail2IntegrationTests.swift; sourceTree = "<group>"; };
+		EB396E5B38A77DAB8EC9DA88 /* run2.trc */ = {isa = PBXFileReference; path = run2.trc; sourceTree = "<group>"; };
 		EB4E89539823D96EB49C208D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		FA3070C20C399DAD10A5E51B /* OfflineAnalysisView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OfflineAnalysisView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -108,6 +140,7 @@
 				9D6907E30A58EBD88C0B7B58 /* Models */,
 				6CAAE69A098449003A76485E /* Muscle */,
 				08F57E3256D709AB42C7883E /* Nimble */,
+				87F801CD2725DFE56017492C /* Offline */,
 				FB82DF9480DFE46692CE459F /* Recording */,
 				855C11D1FAD67039BFAEBF2B /* Resources */,
 			);
@@ -118,10 +151,14 @@
 			isa = PBXGroup;
 			children = (
 				39C64A42A229077EC3CF47FD /* BodyJointTests.swift */,
+				4B54F205ADC895D156D4DF33 /* ImportedMotionTests.swift */,
 				BBA3DB595817CE4AC35EB1E9 /* MomentArmTests.swift */,
 				85CB2DC650F7D9EA6AA72EF6 /* MotionRecorderTests.swift */,
 				91F66CB7BEA67689B99D4833 /* MuscleSolverTests.swift */,
 				AF341D3E417E0E3014A867EA /* NimbleBridgeTests.swift */,
+				58125BE8B717D8007650ED2E /* OfflineAnalysisExporterTests.swift */,
+				982D5FF3155ED0C535ECAAB7 /* OfflineKeypointTrackTests.swift */,
+				E0D6733F2E535E33B7AF28DC /* OfflineTrail2IntegrationTests.swift */,
 				4AEC9BFD12C6D6FC08E98C76 /* TRCExporterTests.swift */,
 			);
 			path = BioMotionTests;
@@ -144,8 +181,23 @@
 			children = (
 				4B9713307F6A75E4289F37D8 /* FullBody.osim */,
 				44D59B2D4FBCD3D020D9136A /* Rajagopal2016.osim */,
+				DA6BE6BE113A81EB0793D49E /* trail2 */,
 			);
 			path = Resources;
+			sourceTree = "<group>";
+		};
+		87F801CD2725DFE56017492C /* Offline */ = {
+			isa = PBXGroup;
+			children = (
+				BD28B46E5F6778CC171DEACB /* ImportedMotion.swift */,
+				C3191E2C2A3B6E7A05FA3E68 /* OfflineAnalysisExporter.swift */,
+				906587B88248F8CEF9B1C7FE /* OfflineAnalysisTrack.swift */,
+				A6BB2911686F53907D4332F2 /* OfflineKeypointTrack.swift */,
+				601D904E383E586AD250E5DC /* OfflineSession.swift */,
+				DC898B1594387F08147AE5E2 /* PlayerLayerView.swift */,
+				B1BD3FAFDFC15509A51B5B5A /* PoseOverlayView.swift */,
+			);
+			path = Offline;
 			sourceTree = "<group>";
 		};
 		9A116F77C6030A2282D901CC = {
@@ -172,6 +224,8 @@
 				61281090913631B0CE9A7C73 /* BioMotionApp.swift */,
 				622F2E1A346D02B435A0299C /* CalibrationView.swift */,
 				137569E8BB6168170913C1FE /* ContentView.swift */,
+				FA3070C20C399DAD10A5E51B /* OfflineAnalysisView.swift */,
+				10D1CE64585775AA2C7FA9B6 /* RootView.swift */,
 				BB61194FADC588D790C9D483 /* SessionChartsView.swift */,
 			);
 			path = App;
@@ -195,6 +249,16 @@
 				A80745E520E5C70DE78840DA /* SkeletonOverlayView.swift */,
 			);
 			path = ARKit;
+			sourceTree = "<group>";
+		};
+		DA6BE6BE113A81EB0793D49E /* trail2 */ = {
+			isa = PBXGroup;
+			children = (
+				697AD51A44D3A02F2B7A9749 /* LaiUhlrich2022_scaled.osim */,
+				80C11EABCE574FC13E154E43 /* run2.mot */,
+				EB396E5B38A77DAB8EC9DA88 /* run2.trc */,
+			);
+			path = trail2;
 			sourceTree = "<group>";
 		};
 		FB82DF9480DFE46692CE459F /* Recording */ = {
@@ -288,7 +352,10 @@
 			files = (
 				8804D81FA38EF570856C727E /* Assets.xcassets in Resources */,
 				B1670D1FDAE907294D961E3F /* FullBody.osim in Resources */,
+				E959D703BF132AD54B3F3914 /* LaiUhlrich2022_scaled.osim in Resources */,
 				FD38E7F1B9C09FAC1FE3C10A /* Rajagopal2016.osim in Resources */,
+				B0483C2F850F07467AE69D05 /* run2.mot in Resources */,
+				E9A0E2D85C9D03593470C0A1 /* run2.trc in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -312,13 +379,22 @@
 				AEBD0D6F6A05031B4795C512 /* BodyTrackingSession.swift in Sources */,
 				030DB864178EF4BB7B0439BA /* CalibrationView.swift in Sources */,
 				230B1F67B40CFD95799F8811 /* ContentView.swift in Sources */,
+				19CC363E2D6930502737D204 /* ImportedMotion.swift in Sources */,
 				D6ACBD79AA382B7E59CAF0A3 /* MomentArmComputer.mm in Sources */,
 				235F9CF6080D2CE0E058DA15 /* MotionRecorder.swift in Sources */,
 				ABE29919DAB357CEDBF7D9E5 /* MuscleOverlay.swift in Sources */,
 				19E2D7453EE33B78EB0260AA /* MuscleSolver.mm in Sources */,
 				2054C2A9E28C0BC0833FCFC9 /* NimbleBridge.mm in Sources */,
 				EDA3373BCD3746A22F7CD272 /* NimbleEngine.swift in Sources */,
+				C34A6F48B59A8F56EB3DCE5F /* OfflineAnalysisExporter.swift in Sources */,
+				33067759C670C84AD38F8C34 /* OfflineAnalysisTrack.swift in Sources */,
+				124B2839D8ECABB2CDD3509E /* OfflineAnalysisView.swift in Sources */,
+				B3D307ED3FB1E1AB4EA98307 /* OfflineKeypointTrack.swift in Sources */,
+				67A1BC38E2F799745ECA4BEF /* OfflineSession.swift in Sources */,
 				39A5BD9ECC7553A6C9F6E556 /* OneEuroFilter.swift in Sources */,
+				BB054C83DF961DD711A986A1 /* PlayerLayerView.swift in Sources */,
+				8BA4D21366AA64ACBB90BAC5 /* PoseOverlayView.swift in Sources */,
+				C20A61053F9B6751389362F7 /* RootView.swift in Sources */,
 				EFDB7E94C87B175ECC83B78E /* SavitzkyGolayFilter.swift in Sources */,
 				EA0D96BEE590A8EC44964245 /* SessionChartsView.swift in Sources */,
 				7ED1CE05D8C199C942D22051 /* SkeletonOverlayView.swift in Sources */,
@@ -332,10 +408,14 @@
 			buildActionMask = 2147483647;
 			files = (
 				32F526B0CAC7BDF4677DC5BF /* BodyJointTests.swift in Sources */,
+				32656D7DCD035C330EF10CBB /* ImportedMotionTests.swift in Sources */,
 				5EB4E09CAD2BF5644147136D /* MomentArmTests.swift in Sources */,
 				BFE358FA68B0E8249A400DBF /* MotionRecorderTests.swift in Sources */,
 				20F59FB07F06FD0CAC0E3C90 /* MuscleSolverTests.swift in Sources */,
 				59DA26453868CF7B43C39B26 /* NimbleBridgeTests.swift in Sources */,
+				86070659C972AE23B5C471FB /* OfflineAnalysisExporterTests.swift in Sources */,
+				FF898665544B834AB5796AE3 /* OfflineKeypointTrackTests.swift in Sources */,
+				2BDB8CA46928B1C0AF448849 /* OfflineTrail2IntegrationTests.swift in Sources */,
 				F879356CA878DC33DEF470D4 /* TRCExporterTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

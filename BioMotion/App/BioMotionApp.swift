@@ -4,7 +4,7 @@ import SwiftUI
 struct BioMotionApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
         }
     }
 }

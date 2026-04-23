@@ -82,7 +82,53 @@ final class NimbleEngine: ObservableObject {
     // IK history for recording
     private(set) var ikHistory: [(timestamp: TimeInterval, angles: [String: Double], error: Double)] = []
     private(set) var idHistory: [(timestamp: TimeInterval, jointTorques: [String: Double])] = []
+    /// Per-frame snapshot captured during a recording session; populated alongside
+    /// `ikHistory`/`idHistory` whenever the SG filter has warmed up.
+    /// Holds GRF + root-residual data the slim `idHistory` tuple drops, plus
+    /// muscle activations / forces / convergence.
+    struct DynamicsHistoryEntry {
+        let timestamp: TimeInterval
+        let ikError: Double
+        let leftFootForce: SIMD3<Double>
+        let rightFootForce: SIMD3<Double>
+        let leftFootInContact: Bool
+        let rightFootInContact: Bool
+        let rootResidualNorm: Double
+        let maxAbsTorqueNm: Double
+        let muscle: MuscleOutput?
+    }
+    private(set) var dynamicsHistory: [DynamicsHistoryEntry] = []
     private var isRecordingResults = false
+
+    /// Block the caller until every queued solver job has finished. Useful for
+    /// batch / offline processing where we dispatch a sequence of frames and
+    /// need to know all results have been published before reading history.
+    func waitForPendingSolverWork() {
+        solverQueue.sync {}
+    }
+
+    /// Load a specific .osim model from disk.
+    func loadModel(fromPath path: String, completion: ((Bool) -> Void)? = nil) {
+        solverQueue.async { [weak self] in
+            guard let self else { return }
+            let success = self.bridge.loadModel(fromPath: path)
+            if success {
+                self.muscleSolver.loadMuscles(fromOsimPath: path)
+                self.momentArmComputer.parseMusclePaths(fromOsimPath: path,
+                                                        from: self.bridge)
+                self.resetAnalysisState()
+            }
+            DispatchQueue.main.async {
+                self.isModelLoaded = success
+                if success {
+                    self.totalMassKg = self.bridge.totalMass
+                    let modelMarkers = self.bridge.markerNames as [String]
+                    print("NimbleEngine: Model loaded — \(self.bridge.numDOFs) DOFs, \(modelMarkers.count) markers, \(self.muscleSolver.numMuscles) muscles, mass \(String(format: "%.1f", self.totalMassKg)) kg")
+                }
+                completion?(success)
+            }
+        }
+    }
 
     /// Load the bundled .osim model.
     func loadBundledModel() {
@@ -110,35 +156,7 @@ final class NimbleEngine: ObservableObject {
             print("NimbleEngine: no .osim model found in bundle")
             return
         }
-        solverQueue.async { [weak self] in
-            guard let self else { return }
-            let success = self.bridge.loadModel(fromPath: path)
-            if success {
-                self.muscleSolver.loadMuscles(fromOsimPath: path)
-                // MomentArmComputer adopts the bridge's skeleton instead of
-                // parsing a second copy — so per-segment scaling propagates
-                // from bridge.scaleModelWithHeight through to R(q) and L_MT.
-                self.momentArmComputer.parseMusclePaths(fromOsimPath: path,
-                                                         from: self.bridge)
-                // Drop any stale SG state from a previous model — the new
-                // model may have a different DOF count / ordering, and even
-                // if not, the sample history is no longer valid.
-                self.dofFilters.removeAll(keepingCapacity: false)
-            }
-            DispatchQueue.main.async {
-                self.isModelLoaded = success
-                if success {
-                    let modelMarkers = self.bridge.markerNames as [String]
-                    self.totalMassKg = self.bridge.totalMass
-                    print("NimbleEngine: Model loaded — \(self.bridge.numDOFs) DOFs, \(modelMarkers.count) markers, \(self.muscleSolver.numMuscles) muscles, mass \(String(format: "%.1f", self.totalMassKg)) kg")
-                    print("NimbleEngine: Model marker names (first 10): \(modelMarkers.prefix(10))")
-                    print("NimbleEngine: Our mapping names (first 10): \(JointMapping.primary.map(\.opensimName).prefix(10))")
-                    // Check how many of our mappings match model markers
-                    let matchCount = JointMapping.primary.filter { modelMarkers.contains($0.opensimName) }.count
-                    print("NimbleEngine: Marker matches: \(matchCount)/\(JointMapping.primary.count)")
-                }
-            }
-        }
+        loadModel(fromPath: path)
     }
 
     /// Scale the model for a specific user.
@@ -182,197 +200,40 @@ final class NimbleEngine: ObservableObject {
                 markerNames: names
             ) else { return }
             let ikTime = (CACurrentMediaTime() - ikStart) * 1000.0
-
-            let numDOFs = ikResult.jointAngles.count
-            let dofNames = ikResult.dofNames
-
-            // Lazy-init per-DOF SG filters whenever the DOF count changes.
-            if self.dofFilters.count != numDOFs {
-                self.dofFilters = (0..<numDOFs).map { _ in SavitzkyGolayFilter() }
-            }
-
-            // --- Push raw IK angles into SG filters, pull smoothed q/dq/ddq ---
-            // Each filter only emits output once its 9-sample window is full,
-            // so the first 8 frames after start (or after a DOF-count change)
-            // yield "raw" IK only, without ID or muscle results.
-            var smoothedQ = [Double](); smoothedQ.reserveCapacity(numDOFs)
-            var smoothedDQ = [Double](); smoothedDQ.reserveCapacity(numDOFs)
-            var smoothedDDQ = [Double](); smoothedDDQ.reserveCapacity(numDOFs)
-            var centerTimestamp = frame.timestamp
-            var sgWarmedUp = true
-
-            for i in 0..<numDOFs {
-                let q = ikResult.jointAngles[i].doubleValue
-                if let out = self.dofFilters[i].push(q, timestamp: frame.timestamp) {
-                    smoothedQ.append(out.pos)
-                    smoothedDQ.append(out.vel)
-                    smoothedDDQ.append(out.acc)
-                    centerTimestamp = out.center
-                } else {
-                    sgWarmedUp = false
-                    break
-                }
-            }
-
-            // Build the "raw" IK output (used for live UI skeleton overlay).
-            var liveAngles: [String: Double] = [:]
-            for i in 0..<min(numDOFs, dofNames.count) {
-                liveAngles[dofNames[i]] = ikResult.jointAngles[i].doubleValue
-            }
-            let liveIkOutput = IKOutput(
-                jointAngles: liveAngles,
-                error: ikResult.error,
-                timestamp: frame.timestamp
+            self.processRawKinematics(
+                rawAngles: ikResult.jointAngles.map(\.doubleValue),
+                dofNames: ikResult.dofNames as [String],
+                timestamp: frame.timestamp,
+                ikError: ikResult.error,
+                ikTime: ikTime
             )
+        }
+    }
 
-            guard sgWarmedUp else {
-                // Still warming up: publish live IK only, no ID/muscle yet.
-                self.publishResults(ik: liveIkOutput, id: nil, muscle: nil,
-                                    ikTime: ikTime, idTime: 0, muscleTime: 0,
-                                    ikResidual: ikResult.error, maxTorqueNm: 0,
-                                    groundY: self.bridge.groundHeightY)
-                return
-            }
+    func prepareImportedMotion(_ series: ImportedMotionSeries) -> ImportedMotionPreparation? {
+        guard isModelLoaded else { return nil }
+        return ImportedMotionPreparer.prepare(
+            series: series,
+            modelDOFNames: bridge.dofNames as [String]
+        )
+    }
 
-            // Smoothed IK output, dated at the center of the SG window.
-            // This is what ID and muscle solves operate on — it matches dq/ddq
-            // temporally, which is essential for correct inverse dynamics.
-            var smoothedAngles: [String: Double] = [:]
-            for i in 0..<min(numDOFs, dofNames.count) {
-                smoothedAngles[dofNames[i]] = smoothedQ[i]
-            }
-            let smoothedIkOutput = IKOutput(
-                jointAngles: smoothedAngles,
-                error: ikResult.error,
-                timestamp: centerTimestamp
+    func processImportedMotionFrame(_ frame: PreparedMotionFrame) {
+        guard isModelLoaded else { return }
+        solverQueue.async { [weak self] in
+            self?.processRawKinematics(
+                rawAngles: frame.positions,
+                dofNames: frame.modelDOFNames,
+                timestamp: frame.timestamp,
+                ikError: 0,
+                ikTime: 0
             )
+        }
+    }
 
-            // --- ID on SG-smoothed q, dq, ddq ---
-            let smoothedQNS: [NSNumber] = smoothedQ.map { NSNumber(value: $0) }
-            let smoothedDQNS: [NSNumber] = smoothedDQ.map { NSNumber(value: $0) }
-            let smoothedDDQNS: [NSNumber] = smoothedDDQ.map { NSNumber(value: $0) }
-
-            var idOutput: IDOutput?
-            var idTime = 0.0
-            var maxTorqueNm = 0.0
-
-            let idStart = CACurrentMediaTime()
-            // Use the GRF-aware ID solver. It runs Nimble's near-CoP
-            // multi-contact inverse dynamics which auto-detects foot contact
-            // and decomposes the system wrench into GRFs + joint torques.
-            if let idResult = self.bridge.solveIDGRF(
-                withJointAngles: smoothedQNS,
-                jointVelocities: smoothedDQNS,
-                jointAccelerations: smoothedDDQNS
-            ) {
-                idTime = (CACurrentMediaTime() - idStart) * 1000.0
-
-                var torques: [String: Double] = [:]
-                for i in 0..<min(idResult.jointTorques.count, dofNames.count) {
-                    let t = idResult.jointTorques[i].doubleValue
-                    torques[dofNames[i]] = t
-                    if abs(t) > maxTorqueNm { maxTorqueNm = abs(t) }
-                }
-
-                var out = IDOutput(jointTorques: torques, timestamp: centerTimestamp)
-                func toSimd(_ arr: [NSNumber]) -> SIMD3<Double> {
-                    guard arr.count >= 3 else { return .zero }
-                    return SIMD3<Double>(arr[0].doubleValue, arr[1].doubleValue, arr[2].doubleValue)
-                }
-                out.leftFootForce  = toSimd(idResult.leftFootForce)
-                out.rightFootForce = toSimd(idResult.rightFootForce)
-                out.leftFootCoP    = toSimd(idResult.leftFootCoP)
-                out.rightFootCoP   = toSimd(idResult.rightFootCoP)
-                out.leftFootInContact  = idResult.leftFootInContact
-                out.rightFootInContact = idResult.rightFootInContact
-                out.rootResidualNorm   = idResult.rootResidualNorm
-                idOutput = out
-            }
-
-            // --- Muscle static optimization (on same SG-centered state) ---
-            // Production path: real moment arms from FK + soft-equality QP +
-            // real Hill-model force-length/velocity. Requires that the
-            // skeleton is at the smoothed pose, which solveIDGRF() already
-            // sets when it runs — MomentArmComputer picks up from there.
-            var muscleOutput: MuscleOutput?
-            var muscleTime = 0.0
-
-            if let id = idOutput {
-                // IMPORTANT: jointTorques arrives as a dictionary, which has
-                // no defined order. We must force a consistent ordering here
-                // so that `dofNames[i]` refers to the same DOF as `torques[i]`
-                // AND as the j-th column of the moment-arm matrix. Use the
-                // DOF names from IK (they are in skeleton order).
-                let torqueKeys: [String] = ikResult.dofNames as [String]
-                let torqueVals = torqueKeys.map { NSNumber(value: id.jointTorques[$0] ?? 0) }
-
-                // Compute the moment-arm matrix R(q) at the smoothed pose.
-                // MomentArmComputer runs its own FK so it expects the pose
-                // to be driven through setPositions. Pass the SG-smoothed q.
-                let momentArms = self.momentArmComputer.computeMomentArms(
-                    withJointAngles: smoothedQNS,
-                    dofNames: torqueKeys
-                ) ?? []
-                let muscleLengthsNS = self.momentArmComputer.currentMuscleLengths
-                let muscleNamesNS = self.momentArmComputer.muscleNames
-                let maxForcesNS = self.momentArmComputer.maxIsometricForces
-                let optimalFibersNS = self.momentArmComputer.optimalFiberLengths
-                let tendonSlacksNS = self.momentArmComputer.tendonSlackLengths
-                let pennationsNS = self.momentArmComputer.pennationAngles
-
-                if !momentArms.isEmpty && muscleNamesNS.count > 0 {
-                    // dt for fiber-velocity finite differencing. We use the
-                    // SG-window centered timestamp vs. the previous frame's.
-                    let nowSec = centerTimestamp
-                    let dt = max(nowSec - (self.lastMuscleSolveTimestamp ?? nowSec - 0.0167),
-                                 1e-3)
-                    self.lastMuscleSolveTimestamp = nowSec
-
-                    if let result = self.muscleSolver.solveReal(
-                        withJointTorques: torqueVals,
-                        momentArms: momentArms,
-                        muscleNames: muscleNamesNS,
-                        muscleLengths: muscleLengthsNS,
-                        maxForces: maxForcesNS,
-                        optimalFiberLengths: optimalFibersNS,
-                        tendonSlackLengths: tendonSlacksNS,
-                        pennationAngles: pennationsNS,
-                        jointVelocities: smoothedDQNS,
-                        dofNames: torqueKeys,
-                        dt: dt,
-                        softPenalty: 1.0
-                    ) {
-                        muscleTime = result.solveTimeMs
-
-                        var activations: [String: Double] = [:]
-                        var forces: [String: Double] = [:]
-                        for i in 0..<result.muscleNames.count {
-                            activations[result.muscleNames[i]] = result.activations[i].doubleValue
-                            forces[result.muscleNames[i]] = result.forces[i].doubleValue
-                        }
-                        muscleOutput = MuscleOutput(
-                            activations: activations,
-                            forces: forces,
-                            converged: result.converged,
-                            timestamp: centerTimestamp
-                        )
-                    }
-                }
-            }
-
-            // Record if enabled (history always uses the SG-centered timestamp
-            // so downstream .mot/.sto exports are temporally consistent).
-            if self.isRecordingResults {
-                self.ikHistory.append((centerTimestamp, smoothedAngles, ikResult.error))
-                if let id = idOutput {
-                    self.idHistory.append((centerTimestamp, id.jointTorques))
-                }
-            }
-
-            self.publishResults(ik: smoothedIkOutput, id: idOutput, muscle: muscleOutput,
-                                ikTime: ikTime, idTime: idTime, muscleTime: muscleTime,
-                                ikResidual: ikResult.error, maxTorqueNm: maxTorqueNm,
-                                groundY: self.bridge.groundHeightY)
+    func resetMotionFilters() {
+        solverQueue.async { [weak self] in
+            self?.resetAnalysisState()
         }
     }
 
@@ -410,6 +271,7 @@ final class NimbleEngine: ObservableObject {
     func startRecordingResults() {
         ikHistory.removeAll()
         idHistory.removeAll()
+        dynamicsHistory.removeAll()
         isRecordingResults = true
     }
 
@@ -487,5 +349,236 @@ final class NimbleEngine: ObservableObject {
 
     enum ExportError: Error {
         case noData
+    }
+
+    private func processRawKinematics(
+        rawAngles: [Double],
+        dofNames: [String],
+        timestamp: TimeInterval,
+        ikError: Double,
+        ikTime: Double
+    ) {
+        let numDOFs = rawAngles.count
+        ensureDofFilters(count: numDOFs)
+
+        var smoothedQ = [Double](); smoothedQ.reserveCapacity(numDOFs)
+        var smoothedDQ = [Double](); smoothedDQ.reserveCapacity(numDOFs)
+        var smoothedDDQ = [Double](); smoothedDDQ.reserveCapacity(numDOFs)
+        var centerTimestamp = timestamp
+        var sgWarmedUp = true
+
+        // Push the new sample into EVERY DOF filter regardless of warm-up state.
+        // The previous early-`break` only pushed DOF 0 during warm-up, so DOFs
+        // 1..N stayed empty until DOF 0 finished its 9-sample window — multiplying
+        // effective warm-up to 9*N frames and silently breaking offline batch
+        // on strided input where the budget is just ~100 frames.
+        for i in 0..<numDOFs {
+            if let out = dofFilters[i].push(rawAngles[i], timestamp: timestamp) {
+                smoothedQ.append(out.pos)
+                smoothedDQ.append(out.vel)
+                smoothedDDQ.append(out.acc)
+                centerTimestamp = out.center
+            } else {
+                sgWarmedUp = false
+            }
+        }
+
+        var liveAngles: [String: Double] = [:]
+        for i in 0..<min(numDOFs, dofNames.count) {
+            liveAngles[dofNames[i]] = rawAngles[i]
+        }
+        let liveIkOutput = IKOutput(
+            jointAngles: liveAngles,
+            error: ikError,
+            timestamp: timestamp
+        )
+
+        guard sgWarmedUp else {
+            publishResults(ik: liveIkOutput, id: nil, muscle: nil,
+                           ikTime: ikTime, idTime: 0, muscleTime: 0,
+                           ikResidual: ikError, maxTorqueNm: 0,
+                           groundY: bridge.groundHeightY)
+            return
+        }
+
+        var smoothedAngles: [String: Double] = [:]
+        for i in 0..<min(numDOFs, dofNames.count) {
+            smoothedAngles[dofNames[i]] = smoothedQ[i]
+        }
+        let smoothedIkOutput = IKOutput(
+            jointAngles: smoothedAngles,
+            error: ikError,
+            timestamp: centerTimestamp
+        )
+
+        let dynamics = runDynamicsAndMuscles(
+            smoothedQ: smoothedQ,
+            smoothedDQ: smoothedDQ,
+            smoothedDDQ: smoothedDDQ,
+            dofNames: dofNames,
+            centerTimestamp: centerTimestamp
+        )
+
+        if isRecordingResults {
+            ikHistory.append((centerTimestamp, smoothedAngles, ikError))
+            if let id = dynamics.idOutput {
+                idHistory.append((centerTimestamp, id.jointTorques))
+            }
+            dynamicsHistory.append(
+                DynamicsHistoryEntry(
+                    timestamp: centerTimestamp,
+                    ikError: ikError,
+                    leftFootForce: dynamics.idOutput?.leftFootForce ?? .zero,
+                    rightFootForce: dynamics.idOutput?.rightFootForce ?? .zero,
+                    leftFootInContact: dynamics.idOutput?.leftFootInContact ?? false,
+                    rightFootInContact: dynamics.idOutput?.rightFootInContact ?? false,
+                    rootResidualNorm: dynamics.idOutput?.rootResidualNorm ?? 0,
+                    maxAbsTorqueNm: dynamics.maxTorqueNm,
+                    muscle: dynamics.muscleOutput
+                )
+            )
+        }
+
+        publishResults(
+            ik: smoothedIkOutput,
+            id: dynamics.idOutput,
+            muscle: dynamics.muscleOutput,
+            ikTime: ikTime,
+            idTime: dynamics.idTime,
+            muscleTime: dynamics.muscleTime,
+            ikResidual: ikError,
+            maxTorqueNm: dynamics.maxTorqueNm,
+            groundY: bridge.groundHeightY
+        )
+    }
+
+    private func runDynamicsAndMuscles(
+        smoothedQ: [Double],
+        smoothedDQ: [Double],
+        smoothedDDQ: [Double],
+        dofNames: [String],
+        centerTimestamp: TimeInterval
+    ) -> (idOutput: IDOutput?, muscleOutput: MuscleOutput?, idTime: Double, muscleTime: Double, maxTorqueNm: Double) {
+        let smoothedQNS = smoothedQ.map { NSNumber(value: $0) }
+        let smoothedDQNS = smoothedDQ.map { NSNumber(value: $0) }
+        let smoothedDDQNS = smoothedDDQ.map { NSNumber(value: $0) }
+
+        var idOutput: IDOutput?
+        var idTime = 0.0
+        var maxTorqueNm = 0.0
+
+        let idStart = CACurrentMediaTime()
+        if let idResult = bridge.solveIDGRF(
+            withJointAngles: smoothedQNS,
+            jointVelocities: smoothedDQNS,
+            jointAccelerations: smoothedDDQNS
+        ) {
+            idTime = (CACurrentMediaTime() - idStart) * 1000.0
+
+            var torques: [String: Double] = [:]
+            for i in 0..<min(idResult.jointTorques.count, dofNames.count) {
+                let t = idResult.jointTorques[i].doubleValue
+                torques[dofNames[i]] = t
+                if abs(t) > maxTorqueNm { maxTorqueNm = abs(t) }
+            }
+
+            var out = IDOutput(jointTorques: torques, timestamp: centerTimestamp)
+            func toSimd(_ arr: [NSNumber]) -> SIMD3<Double> {
+                guard arr.count >= 3 else { return .zero }
+                return SIMD3<Double>(arr[0].doubleValue, arr[1].doubleValue, arr[2].doubleValue)
+            }
+            out.leftFootForce = toSimd(idResult.leftFootForce)
+            out.rightFootForce = toSimd(idResult.rightFootForce)
+            out.leftFootCoP = toSimd(idResult.leftFootCoP)
+            out.rightFootCoP = toSimd(idResult.rightFootCoP)
+            out.leftFootInContact = idResult.leftFootInContact
+            out.rightFootInContact = idResult.rightFootInContact
+            out.rootResidualNorm = idResult.rootResidualNorm
+            idOutput = out
+        }
+
+        var muscleOutput: MuscleOutput?
+        var muscleTime = 0.0
+
+        if let id = idOutput {
+            let torqueVals = dofNames.map { NSNumber(value: id.jointTorques[$0] ?? 0) }
+            let momentArms = momentArmComputer.computeMomentArms(
+                withJointAngles: smoothedQNS,
+                dofNames: dofNames
+            ) ?? []
+            let muscleLengthsNS = momentArmComputer.currentMuscleLengths
+            let muscleNamesNS = momentArmComputer.muscleNames
+            let maxForcesNS = momentArmComputer.maxIsometricForces
+            let optimalFibersNS = momentArmComputer.optimalFiberLengths
+            let tendonSlacksNS = momentArmComputer.tendonSlackLengths
+            let pennationsNS = momentArmComputer.pennationAngles
+
+            if !momentArms.isEmpty && muscleNamesNS.count > 0 {
+                let nowSec = centerTimestamp
+                let dt = max(nowSec - (lastMuscleSolveTimestamp ?? nowSec - 0.0167), 1e-3)
+                lastMuscleSolveTimestamp = nowSec
+
+                if let result = muscleSolver.solveReal(
+                    withJointTorques: torqueVals,
+                    momentArms: momentArms,
+                    muscleNames: muscleNamesNS,
+                    muscleLengths: muscleLengthsNS,
+                    maxForces: maxForcesNS,
+                    optimalFiberLengths: optimalFibersNS,
+                    tendonSlackLengths: tendonSlacksNS,
+                    pennationAngles: pennationsNS,
+                    jointVelocities: smoothedDQNS,
+                    dofNames: dofNames,
+                    dt: dt,
+                    softPenalty: 1.0
+                ) {
+                    muscleTime = result.solveTimeMs
+
+                    var activations: [String: Double] = [:]
+                    var forces: [String: Double] = [:]
+                    for i in 0..<result.muscleNames.count {
+                        activations[result.muscleNames[i]] = result.activations[i].doubleValue
+                        forces[result.muscleNames[i]] = result.forces[i].doubleValue
+                    }
+                    muscleOutput = MuscleOutput(
+                        activations: activations,
+                        forces: forces,
+                        converged: result.converged,
+                        timestamp: centerTimestamp
+                    )
+                }
+            }
+        }
+
+        return (idOutput, muscleOutput, idTime, muscleTime, maxTorqueNm)
+    }
+
+    private func ensureDofFilters(count: Int) {
+        if dofFilters.count != count {
+            dofFilters = (0..<count).map { _ in SavitzkyGolayFilter() }
+        }
+    }
+
+    private func resetAnalysisState() {
+        dofFilters.removeAll(keepingCapacity: false)
+        lastMuscleSolveTimestamp = nil
+        ikHistory.removeAll(keepingCapacity: false)
+        idHistory.removeAll(keepingCapacity: false)
+        dynamicsHistory.removeAll(keepingCapacity: false)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.lastIKResult = nil
+            self.lastIDResult = nil
+            self.lastMuscleResult = nil
+            self.ikSolveTimeMs = 0
+            self.idSolveTimeMs = 0
+            self.muscleSolveTimeMs = 0
+            self.ikMarkerResidualMeters = 0
+            self.maxTorquePerKg = 0
+            self.leftFootLoadFraction = 0
+            self.rightFootLoadFraction = 0
+            self.rootResidualPerKg = 0
+            self.groundHeightY = self.bridge.groundHeightY
+        }
     }
 }
