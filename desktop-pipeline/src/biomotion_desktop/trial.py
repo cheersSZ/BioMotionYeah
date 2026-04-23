@@ -25,6 +25,20 @@ class Trial:
     start_time: Optional[float] = None
     end_time: Optional[float] = None
     lowpass_hz: float = 6.0
+    # Subject anthropometrics. When `subject_mass_kg` is set, the pipeline
+    # uniformly rescales every body's mass in the model so the total matches
+    # the measured value before running ID/SO — this directly improves the
+    # pelvis residual and per-muscle force magnitudes when no GRF is
+    # available (the dominant failure mode of OpenCap-style data; see
+    # OPEN_ISSUES §4.1).
+    #
+    # `subject_height_m` is currently stored only for traceability — it is
+    # reserved for the future contact-implicit GRF estimator (de Leva-style
+    # segment scaling, foot contact sphere placement) and is intentionally
+    # NOT used by IK/ID/SO yet. We accept it now so trial configs don't have
+    # to be re-versioned later.
+    subject_mass_kg: Optional[float] = None
+    subject_height_m: Optional[float] = None
     extra: dict = field(default_factory=dict)
 
     def required_paths(self) -> list[Path]:
@@ -77,8 +91,13 @@ def load_trial(config_path: Path | str) -> Trial:
         "grf_mot", "grf_xml",
         "start_time", "end_time",
         "lowpass_hz",
+        "subject_mass_kg", "subject_height_m",
     }
     extra = {k: v for k, v in raw.items() if k not in known}
+
+    def _opt_float(key: str) -> Optional[float]:
+        v = raw.get(key)
+        return None if v is None else float(v)
 
     trial = Trial(
         name=str(name),
@@ -89,6 +108,8 @@ def load_trial(config_path: Path | str) -> Trial:
         start_time=raw.get("start_time"),
         end_time=raw.get("end_time"),
         lowpass_hz=float(raw.get("lowpass_hz", 6.0)),
+        subject_mass_kg=_opt_float("subject_mass_kg"),
+        subject_height_m=_opt_float("subject_height_m"),
         extra=extra,
     )
     trial.validate_exists()

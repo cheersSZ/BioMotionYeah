@@ -229,6 +229,140 @@ def test_compare_strips_opensim_id_suffixes(tmp_path: Path) -> None:
     assert id_cmp.overall["rmse_max"] < 1e-9
 
 
+def test_compare_excludes_locked_dofs_from_aggregates(tmp_path: Path) -> None:
+    """A DOF that's locked on the desktop side (e.g. OpenSim's mtp_angle)
+    must be reported per-channel but not pollute rmse_mean / r2_mean."""
+    desk = tmp_path / "desktop"
+    ios = tmp_path / "ios"
+    desk.mkdir()
+    ios.mkdir()
+    n = 200
+    times = np.linspace(0, 1, n)
+    moving = 20.0 * np.sin(2 * np.pi * times)
+    locked_zero = np.zeros(n)
+    nonzero_const = np.full(n, 7.5)
+
+    # Both sides expose the same two channels. hip_flexion_r matches well;
+    # mtp_angle_l is locked at 0 on desktop and held at +7.5° on iOS.
+    desk_df = pd.DataFrame(
+        {"hip_flexion_r": moving, "mtp_angle_l": locked_zero},
+        index=pd.Index(times, name="time"),
+    )
+    ios_df = pd.DataFrame(
+        {"hip_flexion_r": moving, "mtp_angle_l": nonzero_const},
+        index=pd.Index(times, name="time"),
+    )
+    write_storage(desk / "trial_kinematics.mot", "trial", desk_df, in_degrees=True)
+    write_storage(ios / "trial_kinematics.mot", "trial", ios_df, in_degrees=True)
+
+    report = compare_folders(desk, ios, "trial")
+    kin = report.files["kinematics.mot"]
+
+    # Per-channel data is preserved for both DOFs, including the locked one.
+    assert "mtp_angle_l" in kin.channels
+    assert "hip_flexion_r" in kin.channels
+    assert kin.channels["mtp_angle_l"].status == "locked_both"
+    assert kin.channels["hip_flexion_r"].status == "ok"
+
+    # Aggregates count both channels but only score the moving one.
+    assert kin.overall["channel_count"] == 2
+    assert kin.overall["scored_count"] == 1
+    assert kin.overall["locked_channels"] == ["mtp_angle_l"]
+    # The moving channel matches exactly → mean RMSE essentially zero.
+    assert kin.overall["rmse_max"] < 1e-9
+
+
+def test_compare_flags_sign_flip_suspect(tmp_path: Path) -> None:
+    """A kinematics channel that's anti-correlated (sign-convention flipped
+    between Nimble and OpenSim) should appear in tier2.sign_flip_suspects."""
+    desk = tmp_path / "desktop"
+    ios = tmp_path / "ios"
+    desk.mkdir()
+    ios.mkdir()
+    n = 400
+    times = np.linspace(0, 1, n)
+    swing = 30.0 * np.sin(2 * np.pi * 3 * times)
+
+    desk_df = pd.DataFrame(
+        {"hip_flexion_r": swing, "knee_angle_r": swing},
+        index=pd.Index(times, name="time"),
+    )
+    ios_df = pd.DataFrame(
+        # hip matches; knee is the same shape but flipped sign + small noise
+        {"hip_flexion_r": swing, "knee_angle_r": -swing + 0.5},
+        index=pd.Index(times, name="time"),
+    )
+    write_storage(desk / "trial_kinematics.mot", "trial", desk_df, in_degrees=True)
+    write_storage(ios / "trial_kinematics.mot", "trial", ios_df, in_degrees=True)
+
+    report = compare_folders(desk, ios, "trial")
+    suspects = report.files["kinematics.mot"].tier2["sign_flip_suspects"]
+    assert "knee_angle_r" in suspects
+    assert "hip_flexion_r" not in suspects
+    s = suspects["knee_angle_r"]
+    # Flipping desktop should drop RMSE far below the original.
+    assert s["flipped_rmse"] < s["original_rmse"]
+    assert s["rmse_ratio"] < 0.1
+    # Pearson R² is invariant under sign flip and stays high.
+    assert s["r2"] > 0.99
+
+
+def test_compare_phase_compensation_recovers_uniform_shift(tmp_path: Path) -> None:
+    """When the two pipelines disagree by a constant N-sample whole-body time
+    shift (the fingerprint of mismatched filter topology — e.g., causal
+    1-Euro vs zero-phase Butterworth filtfilt), the phase-compensation tier
+    should:
+      • recover the shift on every channel,
+      • cut RMSE far below the original,
+      • report uniform sign across channels in the aggregate.
+
+    Convention exercised here: positive `best_lag_samples` means iOS leads
+    desktop. The motivating real-data finding was +3 samples / +25 ms on
+    `knee_angle_r` — desktop's heavy 6 Hz filtfilt smoothed peaks and lagged
+    iOS's lightly-filtered signal.
+    """
+    desk = tmp_path / "desktop"
+    ios = tmp_path / "ios"
+    n = 600
+    times = np.linspace(0, 1, n)
+    base_kin = np.column_stack([
+        20.0 * np.sin(2 * np.pi * 4 * times),
+        15.0 * np.cos(2 * np.pi * 4 * times),
+    ])
+
+    # Inject "iOS leads desktop by 12 samples". `np.roll(arr, -k)` advances
+    # the signal so element i becomes element (i + k) — i.e., the rolled
+    # signal reaches each value k samples earlier. Use a shift comfortably
+    # above PHASE_COMPENSATION_MIN_LAG_MS (= 12 ms at 599 Hz fps).
+    shift = 12
+    desk.mkdir(); ios.mkdir()
+    df_d = pd.DataFrame(base_kin, columns=["hip_flexion_r", "knee_angle_r"],
+                        index=pd.Index(times, name="time"))
+    ios_kin = np.roll(base_kin, -shift, axis=0)
+    df_i = pd.DataFrame(ios_kin, columns=["hip_flexion_r", "knee_angle_r"],
+                        index=pd.Index(times, name="time"))
+    write_storage(desk / "trial_kinematics.mot", "trial", df_d, in_degrees=True)
+    write_storage(ios  / "trial_kinematics.mot", "trial", df_i, in_degrees=True)
+
+    report = compare_folders(desk, ios, "trial")
+    tier2 = report.files["kinematics.mot"].tier2
+    comp = tier2["phase_compensated"]
+    summary = tier2["phase_compensation_summary"]
+
+    # Both channels should surface — uniform shift means uniform finding.
+    assert "hip_flexion_r" in comp
+    assert "knee_angle_r" in comp
+    knee = comp["knee_angle_r"]
+    # Positive lag = iOS leads desktop = exactly what we injected.
+    assert knee["best_lag_samples"] == shift
+    assert knee["rmse_at_best_lag"] < 0.1 * knee["original_rmse"]
+    assert knee["r2_at_best_lag"] > 0.99
+    # Aggregate must show uniform sign — the fingerprint of a filter-
+    # topology mismatch as opposed to per-channel noise.
+    assert summary["uniform_sign"] is True
+    assert summary["median_lag_ms"] > 0
+
+
 def test_compare_flags_unmatched_columns(tmp_path: Path) -> None:
     desk = tmp_path / "desktop"
     ios = tmp_path / "ios"
@@ -276,6 +410,36 @@ def test_load_export_and_autodetect_stem(tmp_path: Path) -> None:
     assert "kinematics.mot" in bundle.files_present()
     assert bundle.summary is not None
     assert bundle.summary["stem"] == "trial"
+
+
+def test_load_trial_parses_subject_anthropometrics(tmp_path: Path) -> None:
+    """`subject_mass_kg` and `subject_height_m` round-trip through the YAML
+    loader as floats. Default to None when omitted so existing configs keep
+    working."""
+    from biomotion_desktop.trial import load_trial
+
+    osim = tmp_path / "model.osim"
+    trc = tmp_path / "motion.trc"
+    osim.write_text("<dummy/>")  # load_trial only checks existence
+    trc.write_text("dummy")
+
+    cfg = tmp_path / "trial.yaml"
+    cfg.write_text(
+        "name: subj01\n"
+        f"osim: {osim.name}\n"
+        f"trc: {trc.name}\n"
+        "subject_mass_kg: 72.5\n"
+        "subject_height_m: 1.78\n"
+    )
+    t = load_trial(cfg)
+    assert t.subject_mass_kg == pytest.approx(72.5)
+    assert t.subject_height_m == pytest.approx(1.78)
+
+    # Same file without the anthropometrics → both fields stay None.
+    cfg.write_text(f"name: subj02\nosim: {osim.name}\ntrc: {trc.name}\n")
+    t = load_trial(cfg)
+    assert t.subject_mass_kg is None
+    assert t.subject_height_m is None
 
 
 def test_load_export_raises_when_empty(tmp_path: Path) -> None:

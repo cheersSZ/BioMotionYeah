@@ -36,6 +36,37 @@ from .storage_io import StorageFile, common_time_grid, resample
 
 ACTIVATION_THRESHOLD = 0.05  # threshold (0–1) used for muscle on/off detection
 
+# A channel is considered "locked" (a DOF the model holds at a fixed value, e.g.
+# OpenSim's metatarsophalangeal joint) when its standard deviation falls below
+# this absolute threshold in the channel's own unit. Locked channels are still
+# reported per-channel — but they are excluded from the file-level aggregates
+# (rmse_mean, r2_mean, …) because including them poisons the averages with
+# meaningless ratios (R² = 0 by construction when std = 0).
+LOCKED_STD_EPS = 1e-6
+
+# Sign-flip diagnostic threshold (kinematics only). A kinematics channel is
+# flagged as a suspected sign-convention mismatch when (a) flipping the
+# desktop signal cuts RMSE by at least this factor AND (b) the original
+# Pearson R² is already high — meaning shape agrees but amplitude doesn't.
+SIGN_FLIP_RMSE_RATIO = 0.5
+SIGN_FLIP_R2_FLOOR = 0.5
+
+# Phase-compensation diagnostic (kinematics only). For each channel we search
+# integer-sample lags up to ±PHASE_SEARCH_MAX_MS for the shift that minimises
+# RMSE between the two signals. A channel is reported as benefiting from
+# compensation when the optimal shift cuts RMSE by at least
+# PHASE_COMPENSATION_RMSE_RATIO and is at least PHASE_COMPENSATION_MIN_LAG_MS
+# away from zero (smaller shifts are within sample-quantisation noise).
+#
+# The motivating finding (run2_short, 2026-04-23): every kinematic DOF lagged
+# the desktop side by +25–33 ms. Compensating that single uniform shift took
+# `knee_angle_r` from RMSE 12.75°/R² 0.83 to RMSE 3.21°/R² 0.99. Root cause is
+# almost certainly the iOS 1-Euro filter's group delay (causal) vs OpenSim's
+# zero-phase Butterworth `filtfilt` (non-causal). See OPEN_ISSUES §4.2.
+PHASE_SEARCH_MAX_MS = 100.0
+PHASE_COMPENSATION_RMSE_RATIO = 0.7
+PHASE_COMPENSATION_MIN_LAG_MS = 12.0
+
 
 # ---------------------------------------------------------------------------
 # Result dataclasses
@@ -50,6 +81,7 @@ class ChannelMetrics:
     r2: float
     bias: float
     n_samples: int
+    status: str = "ok"     # "ok" | "locked_desktop" | "locked_ios" | "locked_both"
 
 
 @dataclass(frozen=True)
@@ -262,7 +294,9 @@ def _compare_one_file(
 
     tier2 = None
     if 2 in tiers and file_key == "kinematics.mot":
-        tier2 = _tier2_kinematics(desk_aligned, ios_aligned, shared, fps=desktop.fps)
+        tier2 = _tier2_kinematics(
+            desk_aligned, ios_aligned, shared, fps=desktop.fps, channels=channels,
+        )
 
     tier3 = None
     if 3 in tiers and file_key == "activations.sto":
@@ -295,6 +329,7 @@ def _channel_metrics(desk: np.ndarray, ios: np.ndarray) -> ChannelMetrics:
             r2=float("nan"),
             bias=float("nan"),
             n_samples=0,
+            status="ok",
         )
     desk = desk[:n]
     ios = ios[:n]
@@ -308,7 +343,26 @@ def _channel_metrics(desk: np.ndarray, ios: np.ndarray) -> ChannelMetrics:
         r2=_pearson_r2(desk, ios),
         bias=float(np.mean(diff)),
         n_samples=int(n),
+        status=_classify_lock(desk, ios),
     )
+
+
+def _classify_lock(desk: np.ndarray, ios: np.ndarray) -> str:
+    """Detect channels where one or both sides hold a fixed value (locked DOF).
+
+    A locked channel cannot be meaningfully scored: R² is undefined when one
+    side is constant, and RMSE collapses to |bias|. Tag them so the aggregator
+    can skip them while still surfacing them per-channel.
+    """
+    desk_locked = float(np.std(desk)) < LOCKED_STD_EPS
+    ios_locked = float(np.std(ios)) < LOCKED_STD_EPS
+    if desk_locked and ios_locked:
+        return "locked_both"
+    if desk_locked:
+        return "locked_desktop"
+    if ios_locked:
+        return "locked_ios"
+    return "ok"
 
 
 def _pearson_r2(a: np.ndarray, b: np.ndarray) -> float:
@@ -328,12 +382,22 @@ def _pearson_r2(a: np.ndarray, b: np.ndarray) -> float:
 def _aggregate_overall(channels: dict[str, ChannelMetrics]) -> dict:
     if not channels:
         return {"channel_count": 0}
-    rmses = np.array([c.rmse for c in channels.values()])
-    max_abs = np.array([c.max_abs for c in channels.values()])
-    r2s = np.array([c.r2 for c in channels.values()])
-    biases = np.array([c.bias for c in channels.values()])
+    locked = sorted(name for name, c in channels.items() if c.status != "ok")
+    scored = {name: c for name, c in channels.items() if c.status == "ok"}
+    if not scored:
+        return {
+            "channel_count": len(channels),
+            "scored_count": 0,
+            "locked_channels": locked,
+        }
+    rmses = np.array([c.rmse for c in scored.values()])
+    max_abs = np.array([c.max_abs for c in scored.values()])
+    r2s = np.array([c.r2 for c in scored.values()])
+    biases = np.array([c.bias for c in scored.values()])
     return {
         "channel_count": len(channels),
+        "scored_count": len(scored),
+        "locked_channels": locked,
         "rmse_mean": float(np.nanmean(rmses)),
         "rmse_max":  float(np.nanmax(rmses)),
         "max_abs_max": float(np.nanmax(max_abs)),
@@ -350,11 +414,19 @@ def _aggregate_overall(channels: dict[str, ChannelMetrics]) -> dict:
 
 
 def _tier2_kinematics(
-    desk: pd.DataFrame, ios: pd.DataFrame, shared: list[str], *, fps: float
+    desk: pd.DataFrame,
+    ios: pd.DataFrame,
+    shared: list[str],
+    *,
+    fps: float,
+    channels: dict[str, ChannelMetrics],
 ) -> dict:
     rom_error: dict[str, float] = {}
     phase_lag_ms: dict[str, float] = {}
+    sign_flip_suspects: dict[str, dict] = {}
+    phase_compensated: dict[str, dict] = {}
     dt_ms = 1000.0 / fps if fps > 0 else 0.0
+    max_lag_samples = int(PHASE_SEARCH_MAX_MS / dt_ms) if dt_ms > 0 else 0
 
     for col in shared:
         d = desk[col].to_numpy()
@@ -369,7 +441,161 @@ def _tier2_kinematics(
             lag_samples = _xcorr_peak_offset(d, i)
             phase_lag_ms[col] = lag_samples * dt_ms
 
-    return {"rom_error": rom_error, "phase_lag_ms": phase_lag_ms}
+        suspect = _sign_flip_suspect(d, i, channels.get(col))
+        if suspect is not None:
+            sign_flip_suspects[col] = suspect
+
+        if max_lag_samples > 0:
+            comp = _phase_compensated_metrics(
+                d, i,
+                original=channels.get(col),
+                max_lag_samples=max_lag_samples,
+                dt_ms=dt_ms,
+            )
+            if comp is not None:
+                phase_compensated[col] = comp
+
+    aggregate = _aggregate_phase_compensation(phase_compensated, dt_ms)
+
+    return {
+        "rom_error": rom_error,
+        "phase_lag_ms": phase_lag_ms,
+        "sign_flip_suspects": sign_flip_suspects,
+        "phase_compensated": phase_compensated,
+        "phase_compensation_summary": aggregate,
+    }
+
+
+def _phase_compensated_metrics(
+    desk: np.ndarray,
+    ios: np.ndarray,
+    *,
+    original: ChannelMetrics | None,
+    max_lag_samples: int,
+    dt_ms: float,
+) -> Optional[dict]:
+    """Search ±max_lag_samples for the shift that minimises RMSE between the
+    two signals; return the best lag and what the metrics would look like
+    after compensation. Returns None when compensation does not materially
+    improve RMSE (the channel is either already aligned or genuinely
+    different in shape, not just shifted).
+
+    Positive lag = iOS lags desktop (we shift iOS *forward* to align).
+    """
+    if original is None or original.status != "ok":
+        return None
+    if original.rmse <= 0 or not math.isfinite(original.rmse):
+        return None
+
+    n = min(len(desk), len(ios))
+    if n < 2 * max_lag_samples + 4:
+        return None
+    desk = desk[:n]
+    ios = ios[:n]
+
+    best_lag = 0
+    best_rmse = original.rmse
+    for lag in range(-max_lag_samples, max_lag_samples + 1):
+        if lag == 0:
+            continue
+        if lag > 0:
+            d_seg = desk[lag:]
+            i_seg = ios[:-lag]
+        else:
+            d_seg = desk[:lag]
+            i_seg = ios[-lag:]
+        diff = i_seg - d_seg
+        rmse = float(np.sqrt(np.mean(diff * diff)))
+        if rmse < best_rmse:
+            best_rmse = rmse
+            best_lag = lag
+
+    if best_lag == 0:
+        return None
+    best_lag_ms = best_lag * dt_ms
+    if abs(best_lag_ms) < PHASE_COMPENSATION_MIN_LAG_MS:
+        return None
+    rmse_ratio = best_rmse / original.rmse
+    if rmse_ratio > PHASE_COMPENSATION_RMSE_RATIO:
+        return None
+
+    if best_lag > 0:
+        d_seg = desk[best_lag:]
+        i_seg = ios[:-best_lag]
+    else:
+        d_seg = desk[:best_lag]
+        i_seg = ios[-best_lag:]
+    r2 = _pearson_r2(d_seg, i_seg)
+    bias = float(np.mean(i_seg - d_seg))
+    return {
+        "best_lag_samples": int(best_lag),
+        "best_lag_ms": best_lag_ms,
+        "rmse_at_best_lag": best_rmse,
+        "r2_at_best_lag": r2,
+        "bias_at_best_lag": bias,
+        "rmse_ratio": rmse_ratio,
+        "original_rmse": original.rmse,
+        "original_r2": original.r2,
+    }
+
+
+def _aggregate_phase_compensation(
+    per_channel: dict[str, dict], dt_ms: float
+) -> dict:
+    """Roll the per-channel phase compensations up so a uniform whole-body
+    time shift is obvious at a glance. A consistent sign across most channels
+    is the fingerprint of a filter-topology mismatch (e.g., iOS 1-Euro causal
+    delay vs desktop zero-phase filtfilt) rather than per-channel noise."""
+    if not per_channel:
+        return {"channel_count": 0}
+    lags_ms = np.array([v["best_lag_ms"] for v in per_channel.values()])
+    return {
+        "channel_count": len(per_channel),
+        "median_lag_ms": float(np.median(lags_ms)),
+        "mean_lag_ms": float(np.mean(lags_ms)),
+        "min_lag_ms": float(np.min(lags_ms)),
+        "max_lag_ms": float(np.max(lags_ms)),
+        "uniform_sign": bool(np.all(lags_ms > 0) or np.all(lags_ms < 0)),
+        "dt_ms": dt_ms,
+    }
+
+
+def _sign_flip_suspect(
+    desk: np.ndarray, ios: np.ndarray, original: ChannelMetrics | None
+) -> Optional[dict]:
+    """Flag a channel as a probable sign-convention mismatch.
+
+    Pearson R² is invariant under sign flip of either input, but RMSE is not.
+    A channel where shape agrees (R² high) yet RMSE is also high is the
+    fingerprint of an inverted axis convention. We do *not* silently flip
+    anything — the comparator only surfaces the hypothesis with the numbers
+    that would result, so the operator can confirm before fixing the model
+    or adding a CHANNEL_MAP transform.
+    """
+    if original is None or original.status != "ok":
+        return None
+    if not math.isfinite(original.r2) or original.r2 < SIGN_FLIP_R2_FLOOR:
+        return None
+    if original.rmse <= 0:
+        return None
+
+    n = min(len(desk), len(ios))
+    if n < 4:
+        return None
+    diff = ios[:n] + desk[:n]  # equivalent to ios - (-desk)
+    flipped_rmse = float(np.sqrt(np.mean(diff * diff)))
+    if flipped_rmse >= SIGN_FLIP_RMSE_RATIO * original.rmse:
+        return None
+    flipped_bias = float(np.mean(diff))
+    return {
+        "original_rmse": original.rmse,
+        "flipped_rmse": flipped_rmse,
+        "rmse_ratio": flipped_rmse / original.rmse,
+        "original_bias": original.bias,
+        "flipped_bias": flipped_bias,
+        "r2": original.r2,  # unchanged by sign flip
+        "verdict": "desktop sign convention probably inverted relative to iOS",
+    }
 
 
 def _xcorr_peak_offset(a: np.ndarray, b: np.ndarray) -> int:

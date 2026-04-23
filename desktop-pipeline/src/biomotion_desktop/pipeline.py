@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from .anthropometrics import apply_subject_overrides
 from .trial import Trial
 from .opensim_ik import run_ik
 from .opensim_id import run_id
@@ -53,6 +54,14 @@ def run_pipeline(
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = trial.name
 
+    # Subject anthropometrics: rescale model body masses to match the
+    # measured subject if `trial.subject_mass_kg` is set. No-op otherwise.
+    # Done up front so IK/ID/SO all consume the same (possibly rescaled)
+    # model. IK is mass-independent so this is harmless for IK.
+    trial, anthropometrics_info = apply_subject_overrides(
+        trial, output_dir, stem=stem
+    )
+
     timings: dict[str, float] = {}
 
     t0 = time.perf_counter()
@@ -79,6 +88,7 @@ def run_pipeline(
         activations=activations,
         forces=forces,
         timings=timings,
+        anthropometrics_info=anthropometrics_info,
     )
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n")
 
@@ -103,6 +113,7 @@ def _build_summary(
     activations: Optional[Path],
     forces: Optional[Path],
     timings: dict,
+    anthropometrics_info: dict,
 ) -> dict:
     kin = read_storage(ik_mot)
     n_frames = len(kin.data.index)
@@ -139,6 +150,9 @@ def _build_summary(
         "end_time": trial.end_time,
         "grf_mot": str(trial.grf_mot) if trial.grf_mot else None,
         "grf_xml": str(trial.grf_xml) if trial.grf_xml else None,
+        "subject_mass_kg": trial.subject_mass_kg,
+        "subject_height_m": trial.subject_height_m,
+        "anthropometrics": anthropometrics_info,
         "timings_s": timings,
         "opensim_version": opensim_version,
         "generated_at": datetime.now(timezone.utc).isoformat(),
