@@ -1,6 +1,7 @@
 # Build outputs
 build/
 DerivedData/
+.deriveddata-device/
 *.xcarchive
 
 # Vendored C++ dependencies — cloned/built separately, not committed
@@ -13,3 +14,9 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# Desktop-pipeline local conda/micromamba install (see desktop-pipeline/OPEN_ISSUES.md)
+.tools/
+
+# OpenCap demo fixture — cloned locally per README (offline-mode preprocessing)
+demodata/

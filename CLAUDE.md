@@ -3,6 +3,8 @@
 Real-time musculoskeletal analysis iOS app. ARKit body tracking → Nimble IK/ID → OSQP muscle optimization → 3D visualization.
 
 > **Setup, dependency cloning, patching, and full build/TestFlight commands live in [`README.md`](./README.md).** This file is LLM-facing context for architecture and gotchas only.
+>
+> **UI parameter reference (every badge / number shown in the app, with units and healthy ranges) lives in [`docs/UI_PARAMETERS.md`](./docs/UI_PARAMETERS.md).**
 
 ## Architecture
 
