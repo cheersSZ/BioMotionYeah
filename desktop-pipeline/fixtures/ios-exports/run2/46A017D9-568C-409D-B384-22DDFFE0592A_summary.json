@@ -1,0 +1,57 @@
+{
+  "dof_count" : 33,
+  "duration_s" : 31.7833334,
+  "fps" : 119.99904000767997,
+  "frame_count" : 3815,
+  "max_root_residual_per_kg_nm" : 0,
+  "max_torque_per_kg_nm" : 29.640826662224701,
+  "model" : "79E1318D-060A-4D48-B0BC-8A17C40E794C.osim",
+  "motion" : "46A017D9-568C-409D-B384-22DDFFE0592A.mot",
+  "muscle_converged_fraction" : 0.99973787680209703,
+  "muscle_converged_frames" : 3814,
+  "muscle_count" : 80,
+  "stem" : "46A017D9-568C-409D-B384-22DDFFE0592A",
+  "top_mean_activations" : [
+    {
+      "mean" : 0.96122809053760128,
+      "muscle" : "tfl_r"
+    },
+    {
+      "mean" : 0.84472254820701642,
+      "muscle" : "tfl_l"
+    },
+    {
+      "mean" : 0.71335072258520471,
+      "muscle" : "addlong_l"
+    },
+    {
+      "mean" : 0.69602984807583224,
+      "muscle" : "addmagProx_l"
+    },
+    {
+      "mean" : 0.67952998323507441,
+      "muscle" : "psoas_l"
+    },
+    {
+      "mean" : 0.64805200597053902,
+      "muscle" : "addbrev_l"
+    },
+    {
+      "mean" : 0.6373612543084145,
+      "muscle" : "iliacus_r"
+    },
+    {
+      "mean" : 0.611662346618705,
+      "muscle" : "piri_l"
+    },
+    {
+      "mean" : 0.60668528482020823,
+      "muscle" : "psoas_r"
+    },
+    {
+      "mean" : 0.58012733656195525,
+      "muscle" : "glmin2_r"
+    }
+  ],
+  "total_mass_kg" : 56.071392808314627
+}

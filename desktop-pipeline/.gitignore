@@ -1,0 +1,26 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+.venv-*/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Pipeline output (regenerable)
+results/
+!results/.gitkeep
+
+# OpenSim leaves these behind in the cwd of any run
+out.log
+err.log
+*.osim.bak
+
+# iOS export folders shared from the phone — checked in as comparator fixtures
+!fixtures/
+!fixtures/**
+.DS_Store

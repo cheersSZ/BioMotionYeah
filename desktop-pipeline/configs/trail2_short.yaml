@@ -1,0 +1,12 @@
+# 5-second slice of the run2 trial — used for SO convergence checks and
+# regression fixtures. Long enough to span ~10 running steps so the iOS↔desktop
+# comparison is statistically meaningful, short enough that SO on 80 muscles
+# finishes in well under a minute.
+name: run2_short
+osim: ../../demodata/opencap-demodata/trail2/LaiUhlrich2022_scaled.osim
+trc: ../../demodata/opencap-demodata/trail2/run2.trc
+grf_mot: null
+grf_xml: null
+start_time: 1.0
+end_time: 6.0
+lowpass_hz: 6.0

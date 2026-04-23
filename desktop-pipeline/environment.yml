@@ -1,0 +1,23 @@
+name: biomotion-desktop
+channels:
+  - opensim-org
+  - conda-forge
+dependencies:
+  - python=3.11
+  # Apple Silicon fix: opensim 4.5.x conda packages need a recent libcxx,
+  # otherwise conda silently downgrades to 4.4. Pinning it from conda-forge
+  # forces the right version on osx-arm64. Harmless on other platforms.
+  - libcxx
+  - opensim=4.5.2
+  # opensim 4.5.2 osx-arm64 wheels are compiled against NumPy 1.25; the conda
+  # solver will otherwise pull a NumPy 2.x build that breaks `_simbody`
+  # import (AttributeError: _ARRAY_API not found). Pin to match.
+  - numpy=1.25.*
+  - pandas>=2.0,<2.3
+  - scipy>=1.10,<1.14
+  - pyyaml>=6.0
+  - matplotlib>=3.7
+  - pytest>=7.4
+  - pip
+  - pip:
+      - -e .

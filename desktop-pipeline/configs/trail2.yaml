@@ -1,0 +1,16 @@
+# Trial config for the bundled OpenCap demo trail2/run2.
+# Paths are resolved relative to this YAML file.
+name: run2
+osim:    ../../demodata/opencap-demodata/trail2/LaiUhlrich2022_scaled.osim
+trc:     ../../demodata/opencap-demodata/trail2/run2.trc
+
+# OpenCap field trials usually do not include force plate data.
+grf_mot: null
+grf_xml: null
+
+# Restrict the analyzed window (seconds). null = use full TRC range.
+start_time: null
+end_time:   null
+
+# Low-pass cutoff applied to IK kinematics before ID and SO. Hz.
+lowpass_hz: 6.0

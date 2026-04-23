@@ -1,0 +1,8 @@
+# Pip-only dependencies. OpenSim itself must be installed via conda
+# (see environment.yml) — there is no reliable PyPI wheel.
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+pyyaml>=6.0
+matplotlib>=3.7
+pytest>=7.4
