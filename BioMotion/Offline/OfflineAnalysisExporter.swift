@@ -255,6 +255,10 @@ enum OfflineAnalysisExporter {
             "stem": stem,
             "model": track.modelName ?? NSNull(),
             "motion": track.motionName ?? NSNull(),
+            // Inverse-dynamics mode that produced this track. "withGRF" is
+            // the production path; "noGRF" is the diagnostic A/B mode used
+            // for isolating GRF-driven asymmetry. See `NimbleEngine.IDMode`.
+            "idMode": track.idMode,
             "frame_count": track.frameCount,
             "duration_s": track.duration,
             "fps": track.fps,

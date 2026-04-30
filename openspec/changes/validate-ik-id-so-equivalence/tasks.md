@@ -1,12 +1,18 @@
+> **Superseded by `fix-bilateral-grf-bias`** (sections 2–4 of that change).
+> The `IDMode` toggle, offline-session plumbing, UI toggle, and `idMode` tag
+> in the export schema are all implemented there. `inputType` tagging is the
+> only piece deferred — pick it up under task 2.x of this change when the
+> `.trc` import path lands.
+
 ## 1. Stage ID — iOS no-GRF mode (smallest, isolates ID)
 
-- [ ] 1.1 Add `enum IDMode { case withGRF, noGRF }` and `var idMode: IDMode = .withGRF` to `BioMotion/Nimble/NimbleEngine.swift`
-- [ ] 1.2 Branch `runDynamicsAndMuscles` on `idMode`: call `bridge.solveIDGRF` for `.withGRF`, `bridge.solveID` for `.noGRF`; in `.noGRF` zero out the GRF/CoP/contact fields on the resulting `IDOutput`
-- [ ] 1.3 Add `var idMode: NimbleEngine.IDMode = .withGRF` to `OfflineSession`; propagate to `nimble.idMode` inside `processAllFrames` before dispatching frames
-- [ ] 1.4 Add a "No-GRF mode (validation)" toggle to `BioMotion/App/OfflineAnalysisView.swift`, bound to `OfflineSession.idMode`, defaulting to off
-- [ ] 1.5 Extend `OfflineAnalysisTrack` with `idMode: String` (default `"withGRF"`) and `inputType: String` (default `"mot"`)
-- [ ] 1.6 Update `OfflineAnalysisExporter` to write `idMode` and `inputType` into the `*_processed.json` summary; update `loadProcessed` to parse them with the documented defaults when keys are absent
-- [ ] 1.7 Manual smoke: import an existing `.mot` trial, run with `idMode = .noGRF`, confirm `IDOutput.leftFootForce/rightFootForce` are zero and torques are non-zero on actuated DOFs
+- [x] 1.1 Add `enum IDMode { case withGRF, noGRF }` and `var idMode: IDMode = .withGRF` to `BioMotion/Nimble/NimbleEngine.swift` *(done in `fix-bilateral-grf-bias`)*
+- [x] 1.2 Branch `runDynamicsAndMuscles` on `idMode`: call `bridge.solveIDGRF` for `.withGRF`, `bridge.solveID` for `.noGRF`; in `.noGRF` zero out the GRF/CoP/contact fields on the resulting `IDOutput` *(done in `fix-bilateral-grf-bias`)*
+- [x] 1.3 Add `var idMode: NimbleEngine.IDMode = .withGRF` to `OfflineSession`; propagate to `nimble.idMode` inside `processAllFrames` before dispatching frames *(done in `fix-bilateral-grf-bias`)*
+- [x] 1.4 Add a "No-GRF mode (validation)" toggle to `BioMotion/App/OfflineAnalysisView.swift`, bound to `OfflineSession.idMode`, defaulting to off *(done in `fix-bilateral-grf-bias`)*
+- [x] 1.5 Extend `OfflineAnalysisTrack` with `idMode: String` (default `"withGRF"`) ~~and `inputType: String` (default `"mot"`)~~ — `inputType` deferred to section 2 of this change *(done in `fix-bilateral-grf-bias`)*
+- [x] 1.6 Update `OfflineAnalysisExporter` to write `idMode` ~~and `inputType`~~ into the summary JSON; update `loadProcessed` to parse with documented defaults when keys are absent *(done in `fix-bilateral-grf-bias`)*
+- [ ] 1.7 Manual smoke: import an existing `.mot` trial, run with `idMode = .noGRF`, confirm `IDOutput.leftFootForce/rightFootForce` are zero and torques are non-zero on actuated DOFs *(falls under `fix-bilateral-grf-bias` section 8)*
 
 ## 2. Stage IK — `.trc` import path on iOS (largest Swift change)
 

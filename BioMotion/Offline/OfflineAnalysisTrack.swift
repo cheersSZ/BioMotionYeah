@@ -33,6 +33,12 @@ struct OfflineAnalysisTrack: Codable {
     let dofNames: [String]
     let muscleNames: [String]
     let samples: [OfflineFrameSample]
+    /// Inverse-dynamics path that produced this track. `"withGRF"` (default,
+    /// production) or `"noGRF"` (diagnostic A/B run). Stored as a string so
+    /// the JSON wire format stays human-inspectable; round-trips through
+    /// Codable transparently. Older blobs without the key decode to
+    /// `"withGRF"` for back-compat.
+    let idMode: String
 
     var frameCount: Int { samples.count }
 
@@ -79,6 +85,46 @@ struct OfflineAnalysisTrack: Codable {
             .sorted(by: { $0.mean > $1.mean })
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case modelName, motionName, totalMassKg, dofNames,
+             muscleNames, samples, idMode
+    }
+
+    /// Custom decoder so JSON written by older builds (which lacked
+    /// `idMode`) still rehydrates cleanly — those tracks were always
+    /// `withGRF` at the time, so that's the safe default. All other fields
+    /// remain required.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        modelName = try c.decodeIfPresent(String.self, forKey: .modelName)
+        motionName = try c.decodeIfPresent(String.self, forKey: .motionName)
+        totalMassKg = try c.decode(Double.self, forKey: .totalMassKg)
+        dofNames = try c.decode([String].self, forKey: .dofNames)
+        muscleNames = try c.decode([String].self, forKey: .muscleNames)
+        samples = try c.decode([OfflineFrameSample].self, forKey: .samples)
+        idMode = try c.decodeIfPresent(String.self, forKey: .idMode) ?? "withGRF"
+    }
+
+    /// Memberwise init kept explicit because adding `init(from:)` above
+    /// suppresses Swift's synthesized initializer.
+    init(
+        modelName: String?,
+        motionName: String?,
+        totalMassKg: Double,
+        dofNames: [String],
+        muscleNames: [String],
+        samples: [OfflineFrameSample],
+        idMode: String
+    ) {
+        self.modelName = modelName
+        self.motionName = motionName
+        self.totalMassKg = totalMassKg
+        self.dofNames = dofNames
+        self.muscleNames = muscleNames
+        self.samples = samples
+        self.idMode = idMode
+    }
+
     /// Convenience builder used by `OfflineSession` after a batch run.
     /// Reads from the engine's recorded histories — see `NimbleEngine.startRecordingResults`.
     @MainActor
@@ -86,7 +132,8 @@ struct OfflineAnalysisTrack: Codable {
         from engine: NimbleEngine,
         dofNames: [String],
         modelName: String?,
-        motionName: String?
+        motionName: String?,
+        idMode: NimbleEngine.IDMode
     ) -> OfflineAnalysisTrack {
         // ikHistory & dynamicsHistory are appended in the same pass through the
         // pipeline, so they line up index-for-index. Use the shorter as the
@@ -132,7 +179,8 @@ struct OfflineAnalysisTrack: Codable {
             totalMassKg: engine.totalMassKg,
             dofNames: dofNames,
             muscleNames: muscleNameSet.sorted(),
-            samples: samples
+            samples: samples,
+            idMode: (idMode == .noGRF) ? "noGRF" : "withGRF"
         )
     }
 }

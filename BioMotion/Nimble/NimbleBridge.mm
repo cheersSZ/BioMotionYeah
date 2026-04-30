@@ -5,6 +5,7 @@
 #include <string>
 #include <memory>
 #include <set>
+#include <algorithm>
 
 #include "dart/biomechanics/OpenSimParser.hpp"
 #include "dart/dynamics/Skeleton.hpp"
@@ -111,30 +112,59 @@ using namespace dart;
     BOOL _modelLoaded;
 
     // Ground-plane calibration for GRF estimation.
-    // Held in the ARKit world frame (y-up). Auto-calibrated from a running
-    // minimum of the subject's feet y-coordinates unless explicitly set.
-    double _groundHeightY;
-    BOOL _groundHeightCalibrated;
+    // Held in the ARKit world frame (y-up). Each foot's ground bar is
+    // auto-calibrated from a running minimum of its own heel y, independently
+    // of the other foot. Per-foot tracking eliminates the bilateral asymmetry
+    // bias that the prior single-scalar `_groundHeightY` introduced when one
+    // heel reached lower than the other across the trial.
+    double _groundHeightLY;
+    double _groundHeightRY;
+    BOOL _groundHeightLCalibrated;
+    BOOL _groundHeightRCalibrated;
+    // Persistent per-foot contact state, sampled across frames so the
+    // hysteresis band in `solveIDGRF` can keep a foot in stance until it
+    // clearly clears the release threshold (no per-frame chatter).
+    BOOL _leftInContact;
+    BOOL _rightInContact;
 }
 
 - (instancetype)init {
     self = [super init];
     if (self) {
         _modelLoaded = NO;
-        _groundHeightY = 0.0;
-        _groundHeightCalibrated = NO;
+        _groundHeightLY = 0.0;
+        _groundHeightRY = 0.0;
+        _groundHeightLCalibrated = NO;
+        _groundHeightRCalibrated = NO;
+        _leftInContact = NO;
+        _rightInContact = NO;
     }
     return self;
 }
 
 - (void)setGroundHeightY:(double)y {
-    _groundHeightY = y;
-    _groundHeightCalibrated = YES;
-    NSLog(@"NimbleBridge: Ground plane set to y=%.4f m", y);
+    // Manual override sets both per-foot bars to the same value, preserving
+    // the pre-fix semantics of "the floor is at this y" for both feet.
+    _groundHeightLY = y;
+    _groundHeightRY = y;
+    _groundHeightLCalibrated = YES;
+    _groundHeightRCalibrated = YES;
+    NSLog(@"NimbleBridge: Ground plane set to y=%.4f m (both feet)", y);
 }
 
-- (double)groundHeightY { return _groundHeightY; }
-- (BOOL)groundHeightCalibrated { return _groundHeightCalibrated; }
+- (double)groundHeightY {
+    if (_groundHeightLCalibrated && _groundHeightRCalibrated) {
+        return std::min(_groundHeightLY, _groundHeightRY);
+    }
+    if (_groundHeightLCalibrated) return _groundHeightLY;
+    if (_groundHeightRCalibrated) return _groundHeightRY;
+    return 0.0;
+}
+- (double)groundHeightLY { return _groundHeightLY; }
+- (double)groundHeightRY { return _groundHeightRY; }
+- (BOOL)groundHeightCalibrated {
+    return _groundHeightLCalibrated && _groundHeightRCalibrated;
+}
 
 - (BOOL)loadModelFromPath:(NSString *)path {
     try {
@@ -264,6 +294,16 @@ using namespace dart;
             NSLog(@"NimbleBridge: ⚠ Unresolvable markers (no fallback body worked): %@",
                   [unplacedNames componentsJoinedByString:@", "]);
         }
+
+        // Reset per-foot ground tracking and contact state — a fresh model
+        // implies a fresh session. Otherwise stale ground bars from a prior
+        // model bleed into the new session's contact detection.
+        _groundHeightLY = 0.0;
+        _groundHeightRY = 0.0;
+        _groundHeightLCalibrated = NO;
+        _groundHeightRCalibrated = NO;
+        _leftInContact = NO;
+        _rightInContact = NO;
 
         _modelLoaded = YES;
         NSLog(@"NimbleBridge: Loaded model with %ld DOFs, %lu markers",
@@ -628,24 +668,44 @@ static inline NSArray<NSNumber *> *vec3ToNSArray(const Eigen::Vector3s& v) {
 
         double calcnLY = calcnL->getWorldTransform().translation().y();
         double calcnRY = calcnR->getWorldTransform().translation().y();
-        double lowest = std::min(calcnLY, calcnRY);
 
-        if (!_groundHeightCalibrated) {
-            _groundHeightY = lowest - 0.01;
-            _groundHeightCalibrated = YES;
-        } else if (lowest - 0.01 < _groundHeightY) {
-            // Ratchet down if a lower foot position is observed.
-            _groundHeightY = lowest - 0.01;
+        // --- 1a. Per-foot ground-height ratcheting ---
+        // Each side tracks its own running minimum independently, so a deep
+        // left-stance never lowers the bar that the right foot is judged
+        // against. The 1 cm offset matches the prior single-bar logic.
+        if (!_groundHeightLCalibrated || (calcnLY - 0.01) < _groundHeightLY) {
+            _groundHeightLY = calcnLY - 0.01;
+            _groundHeightLCalibrated = YES;
+        }
+        if (!_groundHeightRCalibrated || (calcnRY - 0.01) < _groundHeightRY) {
+            _groundHeightRY = calcnRY - 0.01;
+            _groundHeightRCalibrated = YES;
         }
 
-        // --- 2. Contact detection ---
-        // A foot is in contact if its heel y sits within CONTACT_THRESHOLD
-        // of the ground and it's moving slowly (we gate on velocity too via
-        // getCOMLinearVelocity later if needed — for baseline we go by
-        // position alone and let the near-CoP solver absorb the rest).
-        const double CONTACT_THRESHOLD = 0.06;  // 6 cm
-        BOOL leftContact  = (calcnLY - _groundHeightY) < CONTACT_THRESHOLD;
-        BOOL rightContact = (calcnRY - _groundHeightY) < CONTACT_THRESHOLD;
+        // --- 2. Contact detection (hysteresis) ---
+        // A foot enters stance when its heel comes within CONTACT_ATTACH of
+        // its own ground bar, and stays in stance until it climbs above
+        // CONTACT_RELEASE. The 2 cm hysteresis band kills per-frame contact
+        // chatter near the threshold (one frame in, one out, …) that produced
+        // the legacy left-vs-right asymmetry in mean activations.
+        const double CONTACT_ATTACH  = 0.06;  // 6 cm
+        const double CONTACT_RELEASE = 0.08;  // 8 cm
+        double leftClearance  = calcnLY - _groundHeightLY;
+        double rightClearance = calcnRY - _groundHeightRY;
+
+        if (_leftInContact) {
+            if (leftClearance > CONTACT_RELEASE) _leftInContact = NO;
+        } else {
+            if (leftClearance < CONTACT_ATTACH)  _leftInContact = YES;
+        }
+        if (_rightInContact) {
+            if (rightClearance > CONTACT_RELEASE) _rightInContact = NO;
+        } else {
+            if (rightClearance < CONTACT_ATTACH)  _rightInContact = YES;
+        }
+
+        BOOL leftContact  = _leftInContact;
+        BOOL rightContact = _rightInContact;
 
         // --- 3. Build initial wrench guesses (Newton-Euler baseline) ---
         // Whole-body weight: GRF_total ≈ mass * g (static stance). We split
@@ -697,11 +757,18 @@ static inline NSArray<NSNumber *> *vec3ToNSArray(const Eigen::Vector3s& v) {
         // as close as possible to the wrench guesses, and (c) have their
         // center-of-pressure inside each foot's support polygon / on the
         // ground plane. Vertical axis = 1 (y).
+        //
+        // The solver only accepts a single ground-height scalar. We pass the
+        // lower of the two per-foot bars so neither foot's CoP gets pushed
+        // through a virtual floor that's *above* its actual heel; vertical
+        // contact detection itself uses the per-foot bars (above), so the
+        // scalar passed here only affects CoP projection inside the solver.
+        const double groundForSolver = std::min(_groundHeightLY, _groundHeightRY);
         auto result = _skeleton->getMultipleContactInverseDynamicsNearCoP(
             ddq,
             contactBodies,
             wrenchGuesses,
-            (s_t)_groundHeightY,
+            (s_t)groundForSolver,
             1,          // vertical axis = y
             0.001,      // default weightForceToMeters
             false);     // not verbose
@@ -721,13 +788,15 @@ static inline NSArray<NSNumber *> *vec3ToNSArray(const Eigen::Vector3s& v) {
         auto copFromWrench = [&](const Eigen::Vector6s& w, const Eigen::Vector3s& ctr)
             -> Eigen::Vector3s {
             // CoP on the ground plane: project from body origin along force
-            // direction to hit y = _groundHeightY. For a vertical-y
-            // convention, CoP_xz = body_xz + (body_y - ground_y) * f_xz/f_y
+            // direction to hit y = groundForSolver. For a vertical-y
+            // convention, CoP_xz = body_xz + (body_y - ground_y) * f_xz/f_y.
+            // Use the same single ground value the solver was given so the
+            // returned CoPs land exactly on the plane the solver constrained.
             Eigen::Vector3s force = w.tail<3>();
             if (std::abs(force.y()) < 1e-6) return ctr;
-            double lambda = (ctr.y() - _groundHeightY) / force.y();
+            double lambda = (ctr.y() - groundForSolver) / force.y();
             Eigen::Vector3s cop = ctr - lambda * force;
-            cop.y() = _groundHeightY;
+            cop.y() = groundForSolver;
             return cop;
         };
         if (leftContact) {

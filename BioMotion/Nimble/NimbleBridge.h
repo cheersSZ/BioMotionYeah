@@ -95,10 +95,20 @@ NS_ASSUME_NONNULL_BEGIN
 /// Ground is assumed flat; M4+ may support tilted floors.
 - (void)setGroundHeightY:(double)y;
 
-/// Current ground height used for contact detection.
+/// Current ground height used for contact detection. Returns
+/// `min(groundHeightLY, groundHeightRY)` when both feet have been calibrated,
+/// the calibrated foot's value when only one is, else 0. Preserves the
+/// pre-`fix-bilateral-grf-bias` semantics for the single-scalar UI badge.
 @property (nonatomic, readonly) double groundHeightY;
 
-/// Whether a ground height has been explicitly set or auto-calibrated.
+/// Per-foot ground heights, tracked independently as a running minimum of the
+/// corresponding heel y. Exposed as a diagnostic; the contact solver inside
+/// `solveIDGRF` uses these per-foot values for contact detection.
+@property (nonatomic, readonly) double groundHeightLY;
+@property (nonatomic, readonly) double groundHeightRY;
+
+/// Whether a ground height has been explicitly set or auto-calibrated. True
+/// once both feet have been seen at least once.
 @property (nonatomic, readonly) BOOL groundHeightCalibrated;
 
 /// Whether a model is currently loaded.

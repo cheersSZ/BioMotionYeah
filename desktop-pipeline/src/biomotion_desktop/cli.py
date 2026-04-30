@@ -16,7 +16,7 @@ from pathlib import Path
 
 from .trial import load_trial
 from .pipeline import run_pipeline
-from .compare import compare_folders, write_report
+from .compare import asymmetry_report_for_export, compare_folders, write_report
 from .ios_export import autodetect_stem
 
 
@@ -53,6 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
                       help="Output JSON path (default: <desktop>/compare.json).")
     cmp_.add_argument("--tiers", default="1,2,3",
                       help="Comma-separated tiers to compute (default: 1,2,3).")
+    # Bilateral-asymmetry add-on. Off by default so existing CI/diff
+    # consumers see byte-identical stdout. When on, appends a per-pair L/R
+    # peak / RMS / asymmetry-index table for the iOS activations and exits
+    # non-zero when any pair exceeds the threshold (CI gate).
+    cmp_.add_argument("--asymmetry-report", action="store_true",
+                      help="Append a bilateral L/R muscle asymmetry table "
+                           "for the iOS activations file.")
+    cmp_.add_argument("--asymmetry-threshold-pct", type=float, default=10.0,
+                      help="Pair asymmetry index threshold in percent (default: 10.0). "
+                           "Only used when --asymmetry-report is set.")
 
     plt_ = sub.add_parser("plot",
                           help="Render per-channel comparison PNGs.")
@@ -123,6 +133,19 @@ def _cmd_compare(args) -> int:
     if report.files_missing.get("desktop_only") or report.files_missing.get("ios_only"):
         print(f"[compare] missing files: {report.files_missing}")
     print(f"[compare] report: {out_path.resolve()}")
+
+    # Opt-in bilateral-asymmetry diagnostic. Appended after the existing
+    # tier output so the legacy stdout prefix stays byte-identical when the
+    # flag is absent. Returns non-zero only when --asymmetry-report is set
+    # AND a pair exceeds the threshold — pure-diagnostic runs never fail
+    # the build accidentally.
+    if args.asymmetry_report:
+        text, passed = asymmetry_report_for_export(
+            args.ios, ios_stem, threshold_pct=args.asymmetry_threshold_pct
+        )
+        print()
+        print(text)
+        return 0 if passed else 1
     return 0
 
 

@@ -54,6 +54,12 @@ ARKit 91 关节 → 1-euro 滤波 → Nimble IK（求解 DOF 角度）
 | `L/R load` | 左脚 \| 右脚 垂直 GRF 占体重的比例（显示为 `0.00\|0.00` 形式） | 体重的倍数 (无量纲) | `\|L+R-1.0\| < 0.3` 或 `L+R < 0.1`（飞行相）为绿 | 双足站立 `≈0.5\|0.5`；单脚承重 `≈1.0\|0.0`；起跳冲击可达 `2–3` |
 | `root res` | ID 求解后浮动根关节 6D 残差，按质量归一 | Nm/kg | `< 0.5 Nm/kg` 为绿 | 衡量 GRF 与运动学的一致性。残差大 → GRF 估计错或 ddq 噪声大 |
 
+> **地面与接触检测**（自 `fix-bilateral-grf-bias` 起）：
+>
+> - 左/右脚地面高度 `_groundHeightLY` / `_groundHeightRY` **独立**追踪（每只脚以自己的 `calcn` 关节 y 减 0.01 m 为基准向下棘轮锁定）。
+> - 旧的 `groundHeightY` 字段保留为单值显示，等于 `min(_groundHeightLY, _groundHeightRY)`，仅在两脚都已校准时才视为 calibrated。
+> - 接触检测使用 **滞回 (hysteresis)**：脚距地面 `≤ 0.06 m` 进入接触（`CONTACT_ATTACH`），距离再次 `≥ 0.08 m` 才离地（`CONTACT_RELEASE`）。这是为了消除单一阈值在边界附近抖动造成的左右负载分配偏差。
+
 ### 1.3 肌肉激活条 (`MuscleActivationBar`)
 
 显示 12 块关键下肢肌肉（左右共 6 对：soleus、gastroc med、tibialis ant、vastus med、rectus fem、glut max）。

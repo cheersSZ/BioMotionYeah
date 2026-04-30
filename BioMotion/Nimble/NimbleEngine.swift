@@ -64,6 +64,29 @@ final class NimbleEngine: ObservableObject {
         let timestamp: TimeInterval
     }
 
+    /// Selects which inverse-dynamics path runs in `runDynamicsAndMuscles`.
+    ///
+    /// - `withGRF` (default): the production path. Uses
+    ///   `bridge.solveIDGRF`, which auto-estimates ground reaction forces
+    ///   and decomposes the system wrench into per-foot contacts plus joint
+    ///   torques. Required for any motion with ground contact.
+    /// - `noGRF`: diagnostic path. Calls `bridge.solveID`, which assumes
+    ///   zero external forces. Joint torques become whatever is needed to
+    ///   reproduce the kinematics from gravity + inertia alone, so any
+    ///   left/right asymmetry observed under this mode cannot have come
+    ///   from the GRF estimator. Useful for isolating bilateral muscle
+    ///   activation bias to either the GRF path (asymmetric in `.withGRF`,
+    ///   symmetric in `.noGRF`) or the rest of the pipeline.
+    enum IDMode {
+        case withGRF
+        case noGRF
+    }
+
+    /// Active inverse-dynamics mode. Read on each frame. Defaults to
+    /// `.withGRF` so the live ARKit pipeline behaves exactly as before.
+    /// Toggled from the offline UI for diagnostic A/B runs.
+    var idMode: IDMode = .withGRF
+
     private let bridge = NimbleBridge()
     private let muscleSolver = MuscleSolver()
     private let momentArmComputer = MomentArmComputer()
@@ -394,10 +417,11 @@ final class NimbleEngine: ObservableObject {
         )
 
         guard sgWarmedUp else {
+            let warmupGroundY = (idMode == .noGRF) ? 0.0 : bridge.groundHeightY
             publishResults(ik: liveIkOutput, id: nil, muscle: nil,
                            ikTime: ikTime, idTime: 0, muscleTime: 0,
                            ikResidual: ikError, maxTorqueNm: 0,
-                           groundY: bridge.groundHeightY)
+                           groundY: warmupGroundY)
             return
         }
 
@@ -439,6 +463,11 @@ final class NimbleEngine: ObservableObject {
             )
         }
 
+        // In noGRF mode the bridge's ground bars are not updated this frame,
+        // so reading `bridge.groundHeightY` would surface stale state from a
+        // prior `.withGRF` run. Publish 0 instead — the GRF/CoP/load-fraction
+        // fields above are already zeroed for the same reason.
+        let publishedGroundY = (idMode == .noGRF) ? 0.0 : bridge.groundHeightY
         publishResults(
             ik: smoothedIkOutput,
             id: dynamics.idOutput,
@@ -448,7 +477,7 @@ final class NimbleEngine: ObservableObject {
             muscleTime: dynamics.muscleTime,
             ikResidual: ikError,
             maxTorqueNm: dynamics.maxTorqueNm,
-            groundY: bridge.groundHeightY
+            groundY: publishedGroundY
         )
     }
 
@@ -468,11 +497,31 @@ final class NimbleEngine: ObservableObject {
         var maxTorqueNm = 0.0
 
         let idStart = CACurrentMediaTime()
-        if let idResult = bridge.solveIDGRF(
-            withJointAngles: smoothedQNS,
-            jointVelocities: smoothedDQNS,
-            jointAccelerations: smoothedDDQNS
-        ) {
+
+        // Select the ID variant up front so the no-GRF diagnostic path stays
+        // structurally clean: the resulting `IDOutput` carries only torques,
+        // with all GRF/CoP/contact/residual fields explicitly zeroed (no
+        // accidental bleed-through from a previous .withGRF frame's state).
+        let idResult: NimbleIDResult?
+        let isGRFPath: Bool
+        switch idMode {
+        case .withGRF:
+            idResult = bridge.solveIDGRF(
+                withJointAngles: smoothedQNS,
+                jointVelocities: smoothedDQNS,
+                jointAccelerations: smoothedDDQNS
+            )
+            isGRFPath = true
+        case .noGRF:
+            idResult = bridge.solveID(
+                withJointAngles: smoothedQNS,
+                jointVelocities: smoothedDQNS,
+                jointAccelerations: smoothedDDQNS
+            )
+            isGRFPath = false
+        }
+
+        if let idResult {
             idTime = (CACurrentMediaTime() - idStart) * 1000.0
 
             var torques: [String: Double] = [:]
@@ -483,17 +532,20 @@ final class NimbleEngine: ObservableObject {
             }
 
             var out = IDOutput(jointTorques: torques, timestamp: centerTimestamp)
-            func toSimd(_ arr: [NSNumber]) -> SIMD3<Double> {
-                guard arr.count >= 3 else { return .zero }
-                return SIMD3<Double>(arr[0].doubleValue, arr[1].doubleValue, arr[2].doubleValue)
+            if isGRFPath {
+                func toSimd(_ arr: [NSNumber]) -> SIMD3<Double> {
+                    guard arr.count >= 3 else { return .zero }
+                    return SIMD3<Double>(arr[0].doubleValue, arr[1].doubleValue, arr[2].doubleValue)
+                }
+                out.leftFootForce = toSimd(idResult.leftFootForce)
+                out.rightFootForce = toSimd(idResult.rightFootForce)
+                out.leftFootCoP = toSimd(idResult.leftFootCoP)
+                out.rightFootCoP = toSimd(idResult.rightFootCoP)
+                out.leftFootInContact = idResult.leftFootInContact
+                out.rightFootInContact = idResult.rightFootInContact
+                out.rootResidualNorm = idResult.rootResidualNorm
             }
-            out.leftFootForce = toSimd(idResult.leftFootForce)
-            out.rightFootForce = toSimd(idResult.rightFootForce)
-            out.leftFootCoP = toSimd(idResult.leftFootCoP)
-            out.rightFootCoP = toSimd(idResult.rightFootCoP)
-            out.leftFootInContact = idResult.leftFootInContact
-            out.rightFootInContact = idResult.rightFootInContact
-            out.rootResidualNorm = idResult.rootResidualNorm
+            // .noGRF: leave all GRF fields at their default zeros set above.
             idOutput = out
         }
 

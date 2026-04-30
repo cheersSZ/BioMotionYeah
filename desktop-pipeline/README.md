@@ -158,6 +158,55 @@ Columns missing from one side are flagged in `unmatched_columns` so you can
 spot DOF / muscle naming mismatches between the iOS Nimble model and the
 OpenSim ground truth.
 
+### Bilateral asymmetry diagnostic
+
+Append `--asymmetry-report` to `compare` to surface per-pair left/right
+asymmetry on the **iOS** activations file. Useful for catching contact-detection
+or GRF-estimator bias that produces lopsided muscle drive even when the input
+kinematics are bilaterally symmetric (e.g. an OpenCap `.mot`).
+
+```bash
+python -m biomotion_desktop.cli compare \
+    --desktop results/trail2_desktop \
+    --ios     /path/to/OfflineExport-run2-XXXXXXXX \
+    --stem    run2 \
+    --asymmetry-report \
+    --asymmetry-threshold-pct 10
+```
+
+Output is appended after the existing tier metrics and looks like:
+
+```
+=== Bilateral Asymmetry Report (threshold ±10.0%) ===
+pair        peak_l   peak_r  peak_diff  rms_diff  asym_idx_pct  status
+tibant       0.452    0.481      0.034     0.018          +6.2  ok
+gaslat       0.612    0.198      0.414     0.221         +102.3  FAIL
+...
+SUMMARY: FAIL (1 pair(s) exceed ±10.0%): gaslat
+```
+
+The asymmetry index is `100 * (peak_l - peak_r) / mean(peak_l, peak_r)`,
+NaN when either side is all-zero. Process exits non-zero when **any** pair
+exceeds the threshold. Without `--asymmetry-report`, stdout and exit code
+stay byte-identical to the pre-flag behavior.
+
+> **Known metric limitation: peak-only, saturation-blind.** When both sides
+> saturate to `1.0` at *different* times, `peak_l = peak_r = 1.0` and the
+> asymmetry index reads `+0.0%` even though the temporal series are wildly
+> different. `rms_diff` in the same row exposes this (values of 0.3+ on
+> "+0.0%" rows are the giveaway). A future change is expected to fold
+> `rms_diff` (or a cross-correlation lag) into the PASS/FAIL gate; until
+> then, **do not treat a "0 FAIL" summary as proof of bilateral symmetry**
+> on its own.
+
+A committed reference fixture lives at
+`tests/fixtures/bilateral_grf_baseline/` — it is a deliberate
+**negative-result snapshot** of the `fix-bilateral-grf-bias` change, kept
+in git so the falsification evidence and the saturation-blindness exhibit
+are reproducible. See its `README.md` for the run command. CI gating on
+this fixture is intentionally **not yet wired** because the fixture
+currently FAILs by design.
+
 ## Why this exists
 
 The iOS pipeline trades accuracy for latency:

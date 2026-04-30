@@ -487,6 +487,21 @@ struct OfflineAnalysisView: View {
                         .foregroundStyle(.secondary)
                 }
             } else {
+                // Diagnostic A/B toggle: when ON the next "Process All Frames"
+                // run uses bridge.solveID (no GRF estimation) instead of
+                // bridge.solveIDGRF. Used to isolate whether observed muscle
+                // asymmetry comes from the GRF estimator (asymmetric in
+                // withGRF, symmetric in noGRF) or from elsewhere in the
+                // pipeline. The mode is captured into the exported track so
+                // re-loaded analyses know which path produced them.
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("No-GRF mode (validation)", isOn: noGRFBinding)
+                        .disabled(session.isProcessingAll)
+                    Text("When enabled, ID runs without ground-reaction-force estimation. Useful for diagnosing GRF-related muscle asymmetry.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
                 HStack(spacing: 12) {
                     Button("Process All Frames") {
                         session.processAllFrames()
@@ -551,6 +566,15 @@ struct OfflineAnalysisView: View {
     }
 
     // MARK: - Helpers
+
+    /// Bridges the enum `OfflineSession.idMode` to the `Bool` a SwiftUI
+    /// `Toggle` expects. ON ⇒ `.noGRF`, OFF ⇒ `.withGRF`.
+    private var noGRFBinding: Binding<Bool> {
+        Binding(
+            get: { session.idMode == .noGRF },
+            set: { session.idMode = $0 ? .noGRF : .withGRF }
+        )
+    }
 
     private func autoOpenSourceIfFirstLaunch() {
         guard !hasSeenSourceSheet,

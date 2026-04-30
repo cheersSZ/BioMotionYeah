@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 
 from .ios_export import ExportBundle, load_export
-from .storage_io import StorageFile, common_time_grid, resample
+from .storage_io import StorageFile, common_time_grid, read_storage, resample
 
 
 ACTIVATION_THRESHOLD = 0.05  # threshold (0–1) used for muscle on/off detection
@@ -658,3 +658,161 @@ def _on_off_indices(signal: np.ndarray, threshold: float):
         return None, None
     idx = np.where(above)[0]
     return int(idx[0]), int(idx[-1])
+
+
+# ---------------------------------------------------------------------------
+# Bilateral asymmetry report (D6 of fix-bilateral-grf-bias)
+# ---------------------------------------------------------------------------
+#
+# Detects left/right muscle pairs in an iOS `_activations.sto` and reports
+# per-pair peak/RMS/asymmetry-index metrics so we can track regressions in
+# the GRF estimator without staring at 80-row plots. Opt-in via the CLI
+# flag `--asymmetry-report` so the existing comparator stdout stays
+# byte-identical for callers that don't ask for it.
+
+
+def _detect_bilateral_pairs(columns: list[str]) -> list[tuple[str, str, str]]:
+    """Return `(stem, left_col, right_col)` triples for every L/R pair found
+    in `columns`, sorted by stem. Orphan columns (one side without a partner)
+    are dropped. Match heuristic: strip an optional trailing `.activation`
+    suffix, then look for the muscle-name endings `_l` / `_r` (OpenSim
+    convention used by Rajagopal2016 and the FullBody cyclist model).
+    Both lowercase and uppercase suffixes are accepted.
+    """
+    def _strip_token(name: str) -> str:
+        if name.endswith(".activation"):
+            return name[: -len(".activation")]
+        return name
+
+    left: dict[str, str] = {}
+    right: dict[str, str] = {}
+    for col in columns:
+        base = _strip_token(col)
+        if base.lower().endswith("_l"):
+            left[base[:-2]] = col
+        elif base.lower().endswith("_r"):
+            right[base[:-2]] = col
+
+    pairs: list[tuple[str, str, str]] = []
+    for stem in sorted(left.keys() & right.keys()):
+        pairs.append((stem, left[stem], right[stem]))
+    return pairs
+
+
+def _compute_pair_metrics(left: np.ndarray, right: np.ndarray) -> dict:
+    """Per-pair asymmetry metrics. Returns a dict with `peak_l`, `peak_r`,
+    `peak_diff`, `rms_diff`, `asym_idx_pct`. `asym_idx_pct` is NaN if either
+    side is identically zero (the symmetric mean is zero and the index is
+    undefined — flagged so the caller can show "n/a" rather than infinity)."""
+    n = min(len(left), len(right))
+    if n == 0:
+        return {
+            "peak_l": float("nan"),
+            "peak_r": float("nan"),
+            "peak_diff": float("nan"),
+            "rms_diff": float("nan"),
+            "asym_idx_pct": float("nan"),
+        }
+    l = np.asarray(left[:n], dtype=float)
+    r = np.asarray(right[:n], dtype=float)
+    peak_l = float(np.max(np.abs(l)))
+    peak_r = float(np.max(np.abs(r)))
+    peak_diff = abs(peak_l - peak_r)
+    rms_diff = float(np.sqrt(np.mean((l - r) ** 2)))
+
+    # asym_idx_pct = 100 * (peak_l - peak_r) / (0.5 * (peak_l + peak_r)).
+    # Sign carries which side dominates: positive ⇒ left is larger.
+    if peak_l == 0.0 and peak_r == 0.0:
+        asym = float("nan")
+    elif peak_l == 0.0 or peak_r == 0.0:
+        # One side is silent: index is mathematically defined (= ±200) but
+        # not meaningful for asymmetry tracking. NaN keeps it out of the
+        # PASS/FAIL aggregate while still showing the raw peaks in the row.
+        asym = float("nan")
+    else:
+        asym = 100.0 * (peak_l - peak_r) / (0.5 * (peak_l + peak_r))
+    return {
+        "peak_l": peak_l,
+        "peak_r": peak_r,
+        "peak_diff": peak_diff,
+        "rms_diff": rms_diff,
+        "asym_idx_pct": asym,
+    }
+
+
+def _format_asymmetry_report(
+    pairs_metrics: list[tuple[str, dict]],
+    threshold_pct: float,
+) -> str:
+    """Render the report exactly as design D6 specifies. The final line is a
+    machine-parsable `SUMMARY: PASS|FAIL ...` summary suitable for CI
+    grep / non-zero-exit logic."""
+    header = f"=== Bilateral Asymmetry Report (threshold ±{threshold_pct:.1f}%) ==="
+    col_header = (
+        f"{'pair':<12} {'peak_l':>8} {'peak_r':>8} "
+        f"{'peak_diff':>10} {'rms_diff':>10} {'asym_idx_pct':>14} {'flag':>6}"
+    )
+    lines = [header, col_header]
+    failing: list[str] = []
+    for stem, m in pairs_metrics:
+        asym = m["asym_idx_pct"]
+        if math.isnan(asym):
+            flag = "n/a"
+            asym_str = "  n/a"
+        elif abs(asym) > threshold_pct:
+            flag = "FAIL"
+            asym_str = f"{asym:+.1f}"
+            failing.append(stem)
+        else:
+            flag = "ok"
+            asym_str = f"{asym:+.1f}"
+        lines.append(
+            f"{stem:<12} {m['peak_l']:>8.3f} {m['peak_r']:>8.3f} "
+            f"{m['peak_diff']:>10.3f} {m['rms_diff']:>10.3f} "
+            f"{asym_str:>14} {flag:>6}"
+        )
+
+    if failing:
+        summary = f"SUMMARY: FAIL ({len(failing)} pair(s) exceed threshold: {', '.join(failing)})"
+    elif not pairs_metrics:
+        summary = "SUMMARY: PASS (no L/R muscle pairs detected — nothing to compare)"
+    else:
+        summary = f"SUMMARY: PASS ({len(pairs_metrics)} pair(s) within ±{threshold_pct:.1f}%)"
+    lines.append(summary)
+    return "\n".join(lines)
+
+
+def asymmetry_report_for_export(
+    ios_dir: Path | str,
+    ios_stem: str,
+    threshold_pct: float = 10.0,
+) -> tuple[str, bool]:
+    """Top-level entry point used by the CLI. Loads
+    `<ios_dir>/<ios_stem>_activations.sto`, runs the pair detection +
+    metrics, and returns `(formatted_text, all_passed)`.
+
+    `all_passed` is True when no pair exceeds `threshold_pct`. NaN-flagged
+    pairs (one side silent or both zero) do not count as failures — they
+    aren't physically meaningful as asymmetry indicators.
+    """
+    ios_dir = Path(ios_dir)
+    sto_path = ios_dir / f"{ios_stem}_activations.sto"
+    if not sto_path.exists():
+        return (
+            f"=== Bilateral Asymmetry Report ===\n"
+            f"SKIP: no activations file at {sto_path}",
+            True,
+        )
+    sto = read_storage(sto_path)
+    pairs = _detect_bilateral_pairs(sto.columns)
+    pair_metrics: list[tuple[str, dict]] = []
+    all_passed = True
+    for stem, l_col, r_col in pairs:
+        m = _compute_pair_metrics(
+            sto.data[l_col].to_numpy(),
+            sto.data[r_col].to_numpy(),
+        )
+        pair_metrics.append((stem, m))
+        if not math.isnan(m["asym_idx_pct"]) and abs(m["asym_idx_pct"]) > threshold_pct:
+            all_passed = False
+    return _format_asymmetry_report(pair_metrics, threshold_pct), all_passed

@@ -22,6 +22,12 @@ final class OfflineSession: ObservableObject {
     @Published var errorMessage: String?
     @Published private(set) var lastSelectedImportName: String?
 
+    /// Inverse-dynamics mode used by the next `processAllFrames()` run. Set
+    /// from the UI before kicking off batch processing. Persisted into the
+    /// resulting `OfflineAnalysisTrack.idMode` so re-loaded analyses know
+    /// which path produced them.
+    @Published var idMode: NimbleEngine.IDMode = .withGRF
+
     // Batch processing
     @Published private(set) var analysisTrack: OfflineAnalysisTrack?
     @Published private(set) var lastExportFolder: URL?
@@ -424,6 +430,11 @@ final class OfflineSession: ObservableObject {
         let modelName = modelURL?.lastPathComponent
         let motionName = motionURL?.lastPathComponent
 
+        // Lock the ID path for this batch run before any frames dispatch.
+        // `processImportedMotionFrame` reads `nimble.idMode` per-frame, so
+        // setting it here guarantees every frame uses the same mode and the
+        // resulting track tags consistently below in `finishBatchRun`.
+        nimble.idMode = idMode
         nimble.resetMotionFilters()
         nimble.startRecordingResults()
 
@@ -528,47 +539,148 @@ final class OfflineSession: ObservableObject {
 
     enum ProcessedFolderError: Error, LocalizedError {
         case folderUnreadable(URL, underlying: Error)
-        case noProcessedJSON(URL)
+        case noProcessedJSON(URL, sawNames: [String])
         case ambiguousProcessedJSON(URL, candidates: [String])
+        case iCloudNotDownloaded(URL, placeholderNames: [String])
 
         var errorDescription: String? {
             switch self {
             case .folderUnreadable(let url, let error):
                 return "Cannot read folder \(url.lastPathComponent): \(error.localizedDescription)"
-            case .noProcessedJSON(let url):
-                return "No *_processed.json found in \(url.lastPathComponent). Pick the OfflineExport-… folder produced by Export."
+            case .noProcessedJSON(let url, let sawNames):
+                let preview = sawNames.isEmpty
+                    ? "(folder is empty)"
+                    : sawNames.prefix(8).joined(separator: ", ")
+                    + (sawNames.count > 8 ? ", …" : "")
+                return "No *_processed.json found in \(url.lastPathComponent). "
+                    + "Saw: \(preview). "
+                    + "Pick the OfflineExport-… folder produced by Export "
+                    + "(or its parent containing exactly one such folder)."
             case .ambiguousProcessedJSON(let url, let candidates):
                 return "Multiple *_processed.json files in \(url.lastPathComponent): \(candidates.joined(separator: ", ")). Pick a folder with exactly one."
+            case .iCloudNotDownloaded(let url, let placeholderNames):
+                let preview = placeholderNames.prefix(4).joined(separator: ", ")
+                return "Found iCloud placeholder(s) in \(url.lastPathComponent) "
+                    + "but the file isn't downloaded yet: \(preview). "
+                    + "Open the folder in the Files app, tap the cloud-download "
+                    + "icon next to the *_processed.json file, then try again."
             }
         }
     }
 
+    /// Locate the lossless `*_processed.json` blob in a user-picked folder.
+    ///
+    /// Robust to three real-world failure modes we kept hitting on iOS:
+    /// 1. **iCloud placeholders** — undownloaded files appear as hidden
+    ///    `.<name>_processed.json.icloud`. We detect them, kick off a
+    ///    download, and surface a clear "tap to download in Files" error
+    ///    instead of pretending the file doesn't exist.
+    /// 2. **Wrong folder picked** — if the user picks the parent that
+    ///    *contains* a single `OfflineExport-…` subfolder, we descend into
+    ///    that subfolder rather than failing.
+    /// 3. **Mystery contents** — the error message lists the actual file
+    ///    names we saw, so the user can tell at a glance whether they
+    ///    picked the right folder.
     private func findProcessedJSON(in folderURL: URL) throws -> URL {
+        switch try scanFolderForProcessedJSON(folderURL) {
+        case .found(let url):
+            return url
+        case .placeholders(let names):
+            throw ProcessedFolderError.iCloudNotDownloaded(folderURL, placeholderNames: names)
+        case .ambiguous(let names):
+            throw ProcessedFolderError.ambiguousProcessedJSON(folderURL, candidates: names)
+        case .none(let topNames):
+            // Fallback: descend one level. Picking the parent of an
+            // OfflineExport-… folder is a common mistake on iOS where the
+            // file picker collapses single-folder parents into themselves.
+            let subfolders = try directChildSubfolders(of: folderURL)
+            for sub in subfolders {
+                if case .found(let url) = try scanFolderForProcessedJSON(sub) {
+                    return url
+                }
+            }
+            throw ProcessedFolderError.noProcessedJSON(folderURL, sawNames: topNames)
+        }
+    }
+
+    private enum ProcessedScan {
+        case found(URL)
+        case placeholders([String])
+        case ambiguous([String])
+        case none([String])
+    }
+
+    private func scanFolderForProcessedJSON(_ folderURL: URL) throws -> ProcessedScan {
         let contents: [URL]
         do {
             contents = try FileManager.default.contentsOfDirectory(
                 at: folderURL,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
+                includingPropertiesForKeys: [.isRegularFileKey],
+                // No .skipsHiddenFiles — iCloud placeholders are hidden by
+                // convention and we want to surface them as a clear error.
+                options: []
             )
         } catch {
             throw ProcessedFolderError.folderUnreadable(folderURL, underlying: error)
         }
 
-        let candidates = contents.filter {
+        let visibleNames = contents
+            .map(\.lastPathComponent)
+            .filter { !$0.hasPrefix(".") }
+            .sorted()
+
+        let matches = contents.filter {
             $0.lastPathComponent.lowercased().hasSuffix("_processed.json")
         }
+        if matches.count == 1 {
+            return .found(matches[0])
+        }
+        if matches.count > 1 {
+            return .ambiguous(matches.map(\.lastPathComponent).sorted())
+        }
 
-        if candidates.isEmpty {
-            throw ProcessedFolderError.noProcessedJSON(folderURL)
+        // No materialized match — look for iCloud placeholders matching
+        // `.<stem>_processed.json.icloud`. If we find one, request a
+        // download so the next attempt has a real file to read.
+        let placeholders = contents.filter { url in
+            let name = url.lastPathComponent
+            return name.hasPrefix(".")
+                && name.lowercased().hasSuffix("_processed.json.icloud")
         }
-        if candidates.count > 1 {
-            throw ProcessedFolderError.ambiguousProcessedJSON(
-                folderURL,
-                candidates: candidates.map(\.lastPathComponent).sorted()
+        if !placeholders.isEmpty {
+            for ph in placeholders {
+                try? FileManager.default.startDownloadingUbiquitousItem(at: ph)
+            }
+            let realNames = placeholders.map(stripICloudPlaceholder)
+            return .placeholders(realNames)
+        }
+
+        return .none(visibleNames)
+    }
+
+    private func directChildSubfolders(of folderURL: URL) throws -> [URL] {
+        let contents: [URL]
+        do {
+            contents = try FileManager.default.contentsOfDirectory(
+                at: folderURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
             )
+        } catch {
+            throw ProcessedFolderError.folderUnreadable(folderURL, underlying: error)
         }
-        return candidates[0]
+        return contents.filter { url in
+            (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+        }
+    }
+
+    private func stripICloudPlaceholder(_ url: URL) -> String {
+        var name = url.lastPathComponent
+        if name.hasPrefix(".") { name.removeFirst() }
+        if name.lowercased().hasSuffix(".icloud") {
+            name.removeLast(".icloud".count)
+        }
+        return name
     }
 
     private func finishBatchRun(dofNames: [String], modelName: String?, motionName: String?) {
@@ -577,7 +689,8 @@ final class OfflineSession: ObservableObject {
             from: nimble,
             dofNames: dofNames,
             modelName: modelName,
-            motionName: motionName
+            motionName: motionName,
+            idMode: nimble.idMode
         )
         analysisTrack = track
         processingProgress = 1
